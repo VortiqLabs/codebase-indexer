@@ -19,6 +19,11 @@ import { EmbeddingQueue } from '../embeddings/EmbeddingQueue.js';
 export interface IndexManagerOptions extends FileScannerOptions {
   workspacePath: string;
   indexDir?: string;
+  partitionId?: string;
+  indexLabel?: string;
+  indexGroup?: string;
+  indexPart?: number;
+  indexPartCount?: number;
   embeddingProvider?: EmbeddingProvider;
 }
 
@@ -30,6 +35,13 @@ export interface IndexUpdateResult {
   unchanged: number;
   deleted: number;
   errors: number;
+}
+
+export interface IndexProgress {
+  stage: 'scan' | 'parse' | 'relations' | 'embedding' | 'persist' | 'complete';
+  message: string;
+  current?: number;
+  total?: number;
 }
 
 export class IndexManager {
@@ -50,14 +62,24 @@ export class IndexManager {
 
   static async create(options: IndexManagerOptions): Promise<IndexManager> {
     const workspacePath = await realpath(options.workspacePath);
-    const uid = createHash('sha256').update(workspacePath).digest('hex').slice(0, 32);
+    const uid = createHash('sha256')
+      .update(options.partitionId ? `${workspacePath}\0${options.partitionId}` : workspacePath)
+      .digest('hex').slice(0, 32);
     const indexDir = options.indexDir ?? path.join(os.homedir(), '.cache', 'codebase-indexer');
     return new IndexManager(options, workspacePath, uid, path.join(path.resolve(indexDir), `${uid}.index`));
   }
 
-  async index(force = false): Promise<IndexUpdateResult> {
+  async index(force = false, onProgress?: (progress: IndexProgress) => void): Promise<IndexUpdateResult> {
     const scanner = await FileScanner.create(this.workspacePath, this.options);
-    const scan = await scanner.scan();
+    onProgress?.({ stage: 'scan', message: `Scanning ${this.workspacePath}` });
+    const scan = await scanner.scan((visitedFiles, acceptedFiles) => {
+      onProgress?.({
+        stage: 'scan',
+        current: visitedFiles,
+        message: `Scanned ${visitedFiles.toLocaleString()} files; ${acceptedFiles.toLocaleString()} are within index limits`
+      });
+    });
+    onProgress?.({ stage: 'scan', current: scan.files.length, total: scan.files.length, message: `Scan complete: ${scan.files.length.toLocaleString()} files accepted` });
     let previous: IndexSnapshot | undefined;
     if (!force) {
       try {
@@ -91,8 +113,15 @@ export class IndexManager {
     const relations = (previous?.relations ?? []).filter((relation) => currentPaths.has(relation.filePath) && !changedPaths.has(relation.filePath));
     const chunks = (previous?.chunks ?? []).filter((chunk) => currentPaths.has(chunk.filePath) && !changedPaths.has(chunk.filePath));
     let parseErrors = 0;
-    for (const filePath of changedPaths) {
-      const file = files.find((record) => record.path === filePath)!;
+    const changedFilePaths = [...changedPaths];
+    const filesByPath = new Map(files.map((file) => [file.path, file]));
+    onProgress?.({ stage: 'parse', current: 0, total: changedFilePaths.length, message: `Parsing ${changedFilePaths.length.toLocaleString()} added or changed files` });
+    for (let index = 0; index < changedFilePaths.length; index++) {
+      const filePath = changedFilePaths[index]!;
+      if (index === 0 || (index + 1) % 100 === 0 || index + 1 === changedFilePaths.length) {
+        onProgress?.({ stage: 'parse', current: index + 1, total: changedFilePaths.length, message: `Parsing files: ${(index + 1).toLocaleString()} of ${changedFilePaths.length.toLocaleString()}` });
+      }
+      const file = filesByPath.get(filePath)!;
       try {
         const source = await readFile(path.join(this.workspacePath, filePath), 'utf8');
         const parsed = await this.parser.parse(file.path, source, file.language);
@@ -113,12 +142,14 @@ export class IndexManager {
         }
       }
     }
+    onProgress?.({ stage: 'relations', message: `Resolving ${relations.length.toLocaleString()} relations` });
     resolveRelations(relations, symbols);
     const provider = this.options.embeddingProvider;
     let vectors: VectorRecord[] = [];
     let embeddingProvider = previous?.metadata.embeddingProvider;
     let embeddingDimensions = previous?.metadata.embeddingDimensions;
     if (provider) {
+      onProgress?.({ stage: 'embedding', current: 0, total: chunks.length, message: `Preparing embeddings for ${chunks.length.toLocaleString()} chunks` });
       const dimensions = provider.dimensions();
       if (!Number.isSafeInteger(dimensions) || dimensions < 1) throw new Error('Embedding provider dimensions must be a positive safe integer');
       const providerId = provider.id ?? provider.constructor.name;
@@ -153,9 +184,15 @@ export class IndexManager {
       vectorCount: vectors.length,
       ...(embeddingProvider ? { embeddingProvider } : {}),
       ...(embeddingDimensions ? { embeddingDimensions } : {}),
+      ...(this.options.indexLabel ? { indexLabel: this.options.indexLabel } : {}),
+      ...(this.options.indexGroup ? { indexGroup: this.options.indexGroup } : {}),
+      ...(this.options.indexPart ? { indexPart: this.options.indexPart } : {}),
+      ...(this.options.indexPartCount ? { indexPartCount: this.options.indexPartCount } : {}),
       configurationHash: createHash('sha256').update(JSON.stringify({
         maxFileSize: this.options.maxFileSize ?? 1024 * 1024,
-        patterns: this.options.patterns ?? []
+        patterns: this.options.patterns ?? [],
+        partitionId: this.options.partitionId,
+        includeFiles: this.options.includeFiles
       })).digest('hex')
     };
     const snapshot: IndexSnapshot = {
@@ -166,7 +203,9 @@ export class IndexManager {
       chunks,
       vectors
     };
+    onProgress?.({ stage: 'persist', message: 'Writing the binary index atomically' });
     await IndexWriter.writeAtomic(this.indexPath, snapshot);
+    onProgress?.({ stage: 'complete', current: files.length, total: files.length, message: 'Indexing complete' });
     return { indexPath: this.indexPath, snapshot, added, changed, unchanged, deleted, errors: scan.errors.length + parseErrors };
   }
 

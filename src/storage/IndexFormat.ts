@@ -23,6 +23,10 @@ export interface IndexMetadata {
   configurationHash: string;
   embeddingProvider?: string;
   embeddingDimensions?: number;
+  indexLabel?: string;
+  indexGroup?: string;
+  indexPart?: number;
+  indexPartCount?: number;
 }
 
 export interface IndexSnapshot {

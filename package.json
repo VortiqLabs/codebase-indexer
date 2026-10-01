@@ -7,7 +7,8 @@
     "node": ">=20"
   },
   "bin": {
-    "codebase-indexer": "dist/bin/codebase-indexer.js"
+    "codebase-indexer": "dist/bin/codebase-indexer.js",
+    "codebase-indexer-mcp": "dist/bin/codebase-indexer-mcp.js"
   },
   "exports": {
     ".": {
@@ -17,23 +18,32 @@
   },
   "files": [
     "dist/src",
-    "dist/bin"
+    "dist/bin",
+    "dist/dashboard"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && esbuild src/dashboard/graph-client.js --bundle --minify --format=iife --platform=browser --outfile=dist/dashboard/graph-client.js && mkdir -p dist/dashboard/monaco && cp -R node_modules/monaco-editor/min/vs dist/dashboard/monaco/",
     "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@msgpack/msgpack": "^3.1.2",
+    "express": "^5.2.1",
     "ignore": "^7.0.5",
+    "monaco-editor": "^0.57.0",
+    "tar": "^7.5.22",
     "tree-sitter-wasms": "^0.1.13",
-    "web-tree-sitter": "^0.25.10"
+    "web-tree-sitter": "^0.25.10",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^24.19.0",
+    "d3": "^7.9.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.0"
   }
 }

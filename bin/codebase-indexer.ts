@@ -7,6 +7,8 @@ import { watch } from 'node:fs/promises';
 import { IndexManager } from '../src/core/IndexManager.js';
 import { IndexReader } from '../src/storage/BinaryIndex.js';
 import type { IndexSnapshot } from '../src/storage/IndexFormat.js';
+import { createDashboardApp, defaultIndexDirectory } from '../src/dashboard/DashboardServer.js';
+import { indexGitHubRepository } from '../src/github/GitHubRepositoryIndexer.js';
 
 interface Arguments {
   positionals: string[];
@@ -22,6 +24,46 @@ async function main(): Promise<void> {
   }
   const parsed = parseArguments(args);
   const json = parsed.flags.has('--json');
+
+  if (command === 'mcp') {
+    const { startCodebaseIndexerMcpServer } = await import('../src/mcp/CodebaseIndexerMcpServer.js');
+    await startCodebaseIndexerMcpServer({
+      ...(firstValue(parsed, '--index-dir') ? { indexDir: path.resolve(firstValue(parsed, '--index-dir')!) } : {})
+    });
+    return;
+  }
+
+  if (command === 'index-github') {
+    const repositorySlug = requiredPositional(parsed, 0, 'index-github requires an owner/repository');
+    const repository = parseGitHubRepository(repositorySlug);
+    const indexDir = path.resolve(firstValue(parsed, '--index-dir') ?? defaultIndexDirectory());
+    const result = await indexGitHubRepository(repository.owner, repository.repository, firstValue(parsed, '--ref') ?? 'HEAD', { indexDir });
+    if (json) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(`GitHub repository indexed: ${result.owner}/${result.repository}@${result.ref}`);
+      console.log(`Workspace: ${result.workspacePath}`);
+      console.log(`Index: ${result.indexPath}`);
+      console.log(`Files: ${result.fileCount}; symbols: ${result.symbolCount}; relations: ${result.relationCount}`);
+      if (result.errors > 0) console.log(`Indexing errors: ${result.errors}`);
+    }
+    return;
+  }
+
+  if (command === 'dashboard') {
+    const indexDirectory = path.resolve(firstValue(parsed, '--index-dir') ?? defaultIndexDirectory());
+    const host = firstValue(parsed, '--host') ?? '127.0.0.1';
+    const port = parsePort(firstValue(parsed, '--port') ?? '4173');
+    const server = createDashboardApp(indexDirectory).listen(port, host);
+    await new Promise<void>((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+    const address = server.address();
+    const actualPort = address && typeof address === 'object' ? address.port : port;
+    console.log(`Dashboard: http://${host}:${actualPort}`);
+    console.log(`Index directory: ${indexDirectory}`);
+    return;
+  }
 
   if (command === 'inspect') {
     const indexPath = requiredPositional(parsed, 0, 'inspect requires an index file');
@@ -154,7 +196,7 @@ function parseArguments(args: string[]): Arguments {
   const positionals: string[] = [];
   const flags = new Set<string>();
   const values = new Map<string, string[]>();
-  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index']);
+  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index', '--host', '--port', '--ref']);
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     if (!arg.startsWith('--')) {
@@ -206,9 +248,24 @@ function parseSize(value: string): number {
   return Number(match[1]) * (unit ? units[unit] : 1);
 }
 
+function parsePort(value: string): number {
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid port: ${value}`);
+  return port;
+}
+
+function parseGitHubRepository(value: string): { owner: string; repository: string } {
+  const normalized = value.replace(/^https?:\/\/github\.com\//iu, '').replace(/\.git$/iu, '').replace(/\/$/u, '');
+  const parts = normalized.split('/');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error('Expected owner/repository or a GitHub repository URL');
+  }
+  return { owner: parts[0], repository: parts[1] };
+}
+
 function printHelp(): void {
-  console.log('codebase-indexer <index|status|search|symbols|references|callers|callees|files|inspect|remove|watch> [path or query] [options]');
-  console.log('Options: --index-dir <path> --force --json --max-file-size <size> --ignore <pattern>');
+  console.log('codebase-indexer <index|index-github|status|search|symbols|references|callers|callees|files|inspect|remove|watch|dashboard|mcp> [path or query] [options]');
+  console.log('Options: --index-dir <path> --force --json --max-file-size <size> --ignore <pattern> --host <host> --port <port> --ref <github-ref>');
 }
 
 main().catch((error: unknown) => {
