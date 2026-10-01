@@ -8,7 +8,7 @@ Node.js 20 or newer. Install dependencies and build with `npm install` and `npm 
 
 ## CLI
 
-Install the CLI with `npm install -g @aicore/codebase-indexer`, then run `codebase-indexer`. In a checkout, use `node dist/bin/codebase-indexer.js`:
+Install the private CLI with `npm install -g @vortiqlabs/codebase-indexer`, then run `codebase-indexer`. Authenticate to GitHub Packages with a personal access token (classic) that has `read:packages`, and configure `@vortiqlabs:registry=https://npm.pkg.github.com` in your npm configuration. In a checkout, use `node dist/bin/codebase-indexer.js`:
 
 ```sh
 codebase-indexer index ./my-project
@@ -26,7 +26,7 @@ The index is written under `~/.cache/codebase-indexer/` by default. Use `--index
 ## API
 
 ```ts
-import { CodebaseIndexer } from '@aicore/codebase-indexer';
+import { CodebaseIndexer } from '@vortiqlabs/codebase-indexer';
 
 const indexer = new CodebaseIndexer({ workspacePath: '/project' });
 await indexer.initialize();
@@ -37,6 +37,10 @@ const context = await indexer.getContext('authentication flow', { maxTokens: 400
 ```
 
 `IndexManager`, `IndexReader`, `IndexWriter`, scanner types, and `INDEX_FORMAT_VERSION` are also exported.
+
+## Publishing
+
+Push a version tag such as `v0.1.0` to publish to GitHub Packages. Update the `version` in `package.json` to match the tag first. The workflow runs the full test suite and publishes with `GITHUB_TOKEN`; new GitHub npm packages are private by default. Consumers need access to the repository/package and a token with `read:packages`.
 
 To enable semantic indexing, pass an explicit `EmbeddingProvider` implementation to `CodebaseIndexer` or `IndexManager`. The provider is never selected automatically. Reindexing with a different provider ID or dimensions rebuilds stored vectors.
 

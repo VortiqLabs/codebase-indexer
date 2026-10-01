@@ -48,7 +48,7 @@ Use the existing project name if one already exists.
 
 Otherwise structure it as a package that can eventually be published or consumed locally:
 
-@aicore/codebase-indexer
+@vortiqlabs/codebase-indexer
 
 or an equivalent neutral package name.
 
@@ -863,7 +863,7 @@ import {
 CodebaseIndexer,
 IndexReader,
 IndexManager
-} from "@aicore/codebase-indexer";
+} from "@vortiqlabs/codebase-indexer";
 
 const indexer = new CodebaseIndexer({
 workspacePath: "/project"
