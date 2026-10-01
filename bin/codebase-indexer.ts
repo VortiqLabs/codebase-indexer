@@ -1,0 +1,217 @@
+#!/usr/bin/env node
+import { createInterface } from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
+import path from 'node:path';
+import { stat } from 'node:fs/promises';
+import { watch } from 'node:fs/promises';
+import { IndexManager } from '../src/core/IndexManager.js';
+import { IndexReader } from '../src/storage/BinaryIndex.js';
+import type { IndexSnapshot } from '../src/storage/IndexFormat.js';
+
+interface Arguments {
+  positionals: string[];
+  flags: Set<string>;
+  values: Map<string, string[]>;
+}
+
+async function main(): Promise<void> {
+  const [command, ...args] = process.argv.slice(2);
+  if (!command || command === 'help' || command === '--help') {
+    printHelp();
+    return;
+  }
+  const parsed = parseArguments(args);
+  const json = parsed.flags.has('--json');
+
+  if (command === 'inspect') {
+    const indexPath = requiredPositional(parsed, 0, 'inspect requires an index file');
+    const resolved = path.resolve(indexPath);
+    const [snapshot, fileStats] = await Promise.all([IndexReader.read(resolved), stat(resolved)]);
+    printStatus(snapshot, resolved, fileStats.size, json);
+    return;
+  }
+
+  const workspacePath = path.resolve(firstValue(parsed, '--path') ?? parsed.positionals[0] ?? '.');
+  const manager = await IndexManager.create({
+    workspacePath,
+    ...(firstValue(parsed, '--index-dir') ? { indexDir: path.resolve(firstValue(parsed, '--index-dir')!) } : {}),
+    ...(firstValue(parsed, '--max-file-size') ? { maxFileSize: parseSize(firstValue(parsed, '--max-file-size')!) } : {}),
+    ...(parsed.values.has('--ignore') ? { patterns: parsed.values.get('--ignore')! } : {})
+  });
+
+  switch (command) {
+    case 'index': {
+      const result = await manager.index(parsed.flags.has('--force'));
+      if (json) {
+        console.log(JSON.stringify({
+          uid: manager.uid,
+          indexPath: result.indexPath,
+          added: result.added,
+          changed: result.changed,
+          unchanged: result.unchanged,
+          deleted: result.deleted,
+          errors: result.errors,
+          metadata: result.snapshot.metadata
+        }, null, 2));
+      } else {
+        console.log(`Index updated: ${result.indexPath}`);
+        console.log(`Files: ${result.snapshot.metadata.fileCount} (${result.added} added, ${result.changed} changed, ${result.unchanged} unchanged, ${result.deleted} deleted)`);
+        if (result.errors > 0) console.log(`Scan errors: ${result.errors}`);
+      }
+      return;
+    }
+    case 'status': {
+      const status = await manager.status();
+      if (!status.indexed || !status.snapshot || status.size === undefined) {
+        if (json) console.log(JSON.stringify({ indexed: false, workspace: manager.workspacePath }));
+        else console.log(`No index found for ${manager.workspacePath}`);
+        return;
+      }
+      if (json) console.log(JSON.stringify({ indexed: true, indexPath: manager.indexPath, size: status.size, ...status.snapshot.metadata }, null, 2));
+      else printStatus(status.snapshot, manager.indexPath, status.size, false);
+      return;
+    }
+    case 'watch': {
+      console.log(`Watching ${manager.workspacePath}`);
+      let timer: NodeJS.Timeout | undefined;
+      for await (const _event of watch(manager.workspacePath, { recursive: true })) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          void manager.index().then((result) => {
+            if (parsed.flags.has('--verbose')) {
+              console.log(`Updated ${result.indexPath}: ${result.added} added, ${result.changed} changed, ${result.deleted} deleted`);
+            }
+          }).catch((error: unknown) => {
+            console.error(error instanceof Error ? error.message : String(error));
+          });
+        }, 300);
+      }
+      return;
+    }
+    case 'files': {
+      const snapshot = await manager.read();
+      const language = firstValue(parsed, '--language');
+      const pattern = firstValue(parsed, '--pattern');
+      const files = snapshot.files.filter((file) => (!language || file.language === language) && (!pattern || file.path.includes(pattern)));
+      if (json) console.log(JSON.stringify(files, null, 2));
+      else for (const file of files) console.log(`${file.path} (${file.language})`);
+      return;
+    }
+    case 'search': {
+      const query = parsed.positionals.join(' ');
+      if (!query) throw new Error('search requires a query');
+      const limit = Number(firstValue(parsed, '--limit') ?? 10);
+      const results = parsed.flags.has('--semantic')
+        ? await manager.semanticSearch(query, limit)
+        : parsed.flags.has('--lexical')
+          ? await manager.search(query, limit)
+          : await manager.hybridSearch(query, limit);
+      if (json) console.log(JSON.stringify(results, null, 2));
+      else for (const result of results) console.log(`${result.file.path}  score ${result.score.toFixed(3)}`);
+      return;
+    }
+    case 'symbols':
+    case 'references':
+    case 'callers':
+    case 'callees': {
+      const name = parsed.positionals.join(' ');
+      if (!name) throw new Error(`${command} requires a name`);
+      const results = command === 'symbols'
+        ? await manager.findSymbol(name)
+        : command === 'references'
+          ? await manager.findReferences(name)
+          : command === 'callers'
+            ? await manager.findCallers(name)
+            : await manager.findCallees(name);
+      if (json) console.log(JSON.stringify(results, null, 2));
+      else for (const result of results) {
+        if ('targetName' in result) console.log(`${result.kind} ${result.filePath}:${result.line}  ${result.targetName}`);
+        else console.log(`${result.kind} ${result.name}  ${result.filePath}:${result.startLine}`);
+      }
+      return;
+    }
+    case 'remove': {
+      if (!parsed.flags.has('--force')) {
+        const prompt = createInterface({ input: stdin, output: stdout });
+        try {
+          const answer = await prompt.question(`Remove index ${manager.indexPath}? [y/N] `);
+          if (!/^y(es)?$/i.test(answer.trim())) return;
+        } finally {
+          prompt.close();
+        }
+      }
+      const removed = await manager.remove();
+      if (json) console.log(JSON.stringify({ removed, indexPath: manager.indexPath }));
+      else console.log(removed ? `Removed ${manager.indexPath}` : 'No index found');
+      return;
+    }
+    default:
+      throw new Error(`Unknown command: ${command}`);
+  }
+}
+
+function parseArguments(args: string[]): Arguments {
+  const positionals: string[] = [];
+  const flags = new Set<string>();
+  const values = new Map<string, string[]>();
+  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index']);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (!arg.startsWith('--')) {
+      positionals.push(arg);
+    } else if (valueOptions.has(arg)) {
+      const value = args[++index];
+      if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
+      values.set(arg, [...(values.get(arg) ?? []), value]);
+    } else {
+      flags.add(arg);
+    }
+  }
+  return { positionals, flags, values };
+}
+
+function printStatus(snapshot: IndexSnapshot, indexPath: string, size: number, json: boolean): void {
+  if (json) {
+    console.log(JSON.stringify({ ...snapshot.metadata, indexPath, size }, null, 2));
+    return;
+  }
+  console.log(`Workspace: ${snapshot.metadata.workspaceRoot}`);
+  console.log(`UID: ${snapshot.metadata.uid}`);
+  console.log(`Index: ${indexPath}`);
+  console.log(`Indexer version: ${snapshot.metadata.indexerVersion}`);
+  console.log(`Last indexed: ${snapshot.metadata.updatedAt}`);
+  console.log(`Files: ${snapshot.metadata.fileCount}`);
+  console.log(`Symbols: ${snapshot.metadata.symbolCount}`);
+  console.log(`Relations: ${snapshot.metadata.relationCount}`);
+  console.log(`Chunks: ${snapshot.metadata.chunkCount}`);
+  console.log(`Vectors: ${snapshot.metadata.vectorCount}`);
+  console.log(`Index size: ${size} bytes`);
+}
+
+function requiredPositional(parsed: Arguments, index: number, message: string): string {
+  const value = parsed.positionals[index];
+  if (!value) throw new Error(message);
+  return value;
+}
+
+function firstValue(parsed: Arguments, name: string): string | undefined {
+  return parsed.values.get(name)?.[0];
+}
+
+function parseSize(value: string): number {
+  const match = /^(\d+)(kb|mb|gb)?$/i.exec(value);
+  if (!match) throw new Error(`Invalid file size: ${value}`);
+  const units = { kb: 1024, mb: 1024 ** 2, gb: 1024 ** 3 };
+  const unit = match[2]?.toLowerCase() as keyof typeof units | undefined;
+  return Number(match[1]) * (unit ? units[unit] : 1);
+}
+
+function printHelp(): void {
+  console.log('codebase-indexer <index|status|search|symbols|references|callers|callees|files|inspect|remove|watch> [path or query] [options]');
+  console.log('Options: --index-dir <path> --force --json --max-file-size <size> --ignore <pattern>');
+}
+
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});
