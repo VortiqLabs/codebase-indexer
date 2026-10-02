@@ -64,6 +64,7 @@ let paused = false;
 let pixelRatio = window.devicePixelRatio || 1;
 let canvasWidth = 1;
 let canvasHeight = 1;
+let animOffset = 0;
 
 function isLightTheme() {
   return document.documentElement.getAttribute('data-theme') === 'light';
@@ -207,7 +208,7 @@ function draw() {
     const dx = target.x - source.x;
     const dy = target.y - source.y;
     const distance = Math.hypot(dx, dy) || 1;
-    const radius = 7;
+    const radius = 8;
     const endX = target.x - dx / distance * radius;
     const endY = target.y - dy / distance * radius;
     let hash = 0;
@@ -222,22 +223,29 @@ function draw() {
     const color = relationColors[link.kind] || '#9aa99f';
     const matchesSearch = !filter || link.source.name.toLowerCase().includes(filter) || link.target.name.toLowerCase().includes(filter);
     const touchesHover = hoveredNode && (source === hoveredNode || target === hoveredNode);
-    context.globalAlpha = hoveredNode ? (touchesHover ? 0.92 : 0.035) : (filter && !matchesSearch ? 0.06 : 0.64);
+    context.globalAlpha = hoveredNode ? (touchesHover ? 0.95 : 0.035) : (filter && !matchesSearch ? 0.06 : 0.7);
+
+    // Thread-like animated line
     context.strokeStyle = color;
     context.fillStyle = color;
-    context.lineWidth = link.kind === 'calls' ? 1.5 : 1;
+    context.lineWidth = 1;
     context.lineCap = 'round';
-    context.setLineDash(link.kind === 'references' ? [2, 4] : link.kind === 'imports' ? [7, 4] : []);
+    context.setLineDash([4, 4]);
+    context.lineDashOffset = -animOffset;
+
     context.beginPath();
     context.moveTo(source.x, source.y);
     context.bezierCurveTo(control1X, control1Y, control2X, control2Y, endX, endY);
     context.stroke();
     context.setLineDash([]);
+
+    // Directional arrowhead showing dependency direction
     const angle = Math.atan2(endY - control2Y, endX - control2X);
+    const arrowSize = 6;
     context.beginPath();
     context.moveTo(endX, endY);
-    context.lineTo(endX - 5 * Math.cos(angle - Math.PI / 6), endY - 5 * Math.sin(angle - Math.PI / 6));
-    context.lineTo(endX - 5 * Math.cos(angle + Math.PI / 6), endY - 5 * Math.sin(angle + Math.PI / 6));
+    context.lineTo(endX - arrowSize * Math.cos(angle - Math.PI / 5), endY - arrowSize * Math.sin(angle - Math.PI / 5));
+    context.lineTo(endX - arrowSize * Math.cos(angle + Math.PI / 5), endY - arrowSize * Math.sin(angle + Math.PI / 5));
     context.closePath();
     context.fill();
   }
@@ -267,6 +275,15 @@ function draw() {
   }
   context.globalAlpha = 1;
   context.restore();
+}
+
+function startThreadAnimation() {
+  function step() {
+    animOffset = (animOffset + 0.25) % 20;
+    draw();
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
 }
 
 function resize() {
@@ -534,6 +551,7 @@ if (stageEl) new ResizeObserver(resize).observe(stageEl);
 
 renderLegend();
 resize();
+startThreadAnimation();
 
 fetch('/api/indexes/' + encodeURIComponent(uid) + '?all=true')
   .then((response) => {
