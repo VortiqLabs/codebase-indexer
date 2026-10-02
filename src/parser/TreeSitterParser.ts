@@ -55,6 +55,7 @@ const grammars: Record<string, string> = {
   tlaplus: 'tlaplus',
   toml: 'toml',
   typescript: 'typescript',
+  tsx: 'tsx',
   vue: 'vue',
   yaml: 'yaml',
   zig: 'zig'
@@ -103,8 +104,11 @@ const inheritanceNodeKinds: Record<string, 'extends' | 'implements'> = {
   trait_bounds: 'implements'
 };
 
+const MAX_PARSE_SIZE = 4 * 1024 * 1024; // 4 MB safety guard against huge source files spiking memory
+
 export class TreeSitterParser {
   async parse(filePath: string, source: string, language: string): Promise<ParsedFile | undefined> {
+    if (source.length > MAX_PARSE_SIZE) return undefined;
     const grammar = grammarFor(filePath, language);
     if (!grammar) return undefined;
     initialized ??= Parser.init();
@@ -112,10 +116,14 @@ export class TreeSitterParser {
     const parser = new Parser();
     let tree: Tree | null | undefined;
     try {
-      parser.setLanguage(await getLanguage(grammar));
+      const lang = await getLanguage(grammar);
+      if (!lang) return undefined;
+      parser.setLanguage(lang);
       tree = parser.parse(source);
       if (!tree) return { symbols: [], relations: [], chunks: [] };
       return extract(tree.rootNode, filePath);
+    } catch {
+      return undefined;
     } finally {
       tree?.delete();
       parser.delete();
@@ -123,16 +131,23 @@ export class TreeSitterParser {
   }
 }
 
-async function getLanguage(grammar: string): Promise<Language> {
-  let language = languages.get(grammar);
-  if (!language) {
-    const wasmPath = localGrammars.has(grammar)
-      ? path.join(path.dirname(fileURLToPath(import.meta.url)), 'grammars', `${grammar}.wasm`)
-      : require.resolve(`tree-sitter-wasms/out/tree-sitter-${grammar}.wasm`);
-    language = Language.load(path.resolve(wasmPath));
-    languages.set(grammar, language);
+async function getLanguage(grammar: string): Promise<Language | undefined> {
+  let languagePromise = languages.get(grammar);
+  if (!languagePromise) {
+    languagePromise = (async () => {
+      try {
+        const wasmPath = localGrammars.has(grammar)
+          ? path.join(path.dirname(fileURLToPath(import.meta.url)), 'grammars', `${grammar}.wasm`)
+          : require.resolve(`tree-sitter-wasms/out/tree-sitter-${grammar}.wasm`);
+        return await Language.load(path.resolve(wasmPath));
+      } catch {
+        return undefined as unknown as Language;
+      }
+    })();
+    languages.set(grammar, languagePromise);
   }
-  return language;
+  const loaded = await languagePromise;
+  return loaded ?? undefined;
 }
 
 function grammarFor(filePath: string, language: string): string | undefined {
