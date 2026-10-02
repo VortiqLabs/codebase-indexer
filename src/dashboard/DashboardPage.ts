@@ -52,6 +52,10 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
     .command-search input { width: 100%; height: 30px; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 0 32px 0 10px; font-size: 12px; outline: none; }
     .command-search input:focus { border-color: var(--border-strong); }
     .kbd-shortcut { position: absolute; right: 8px; top: 6px; font-family: var(--mono); font-size: 10px; color: var(--text-disabled); border: 1px solid var(--border); border-radius: 3px; padding: 1px 4px; }
+    .index-picker { display: flex; align-items: center; gap: 7px; min-width: 180px; max-width: 320px; }
+    .index-picker-label { color: var(--text-subtle); font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; }
+    .index-picker select { width: 100%; min-width: 0; height: 30px; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 0 8px; outline: none; font-size: 11px; }
+    .index-picker select:focus { border-color: var(--border-strong); }
 
     .top-actions { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 11px; }
     .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-main); }
@@ -128,6 +132,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
       </div>
 
       <div class="top-actions">
+        <label class="index-picker"><span class="index-picker-label">INDEX FILE</span><select id="index-select" aria-label="Choose index file"><option value="">Loading indexes…</option></select></label>
         <span><i class="status-dot"></i> <span id="top-status">Index up to date</span></span>
         <span class="badge" id="top-branch">main</span>
         <button class="btn-top" id="btn-reindex">Re-index</button>
@@ -525,18 +530,47 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         var res = await fetch('/api/indexes');
         var payload = await res.json();
         indexes = payload.indexes || [];
-        if (indexes.length > 0) {
-          var first = indexes[0];
-          activeUid = first.metadata.uid;
-          el('top-workspace-path').textContent = first.metadata.workspaceRoot;
-          el('nav-dep-graph').href = '/graph/' + encodeURIComponent(activeUid);
-          renderOverview(first);
-          loadAllPanels(activeUid);
+        var selector = el('index-select');
+        selector.replaceChildren();
+        indexes.forEach(function(item) {
+          var option = document.createElement('option');
+          option.value = item.metadata.uid;
+          option.textContent = item.fileName;
+          option.title = item.metadata.workspaceRoot;
+          selector.appendChild(option);
+        });
+        var savedUid = localStorage.getItem('codebase_index_uid');
+        var initial = indexes.find(function(item) { return item.metadata.uid === savedUid; }) || indexes[0];
+        if (initial) {
+          selector.value = initial.metadata.uid;
+          selectIndex(initial.metadata.uid);
+        } else {
+          var empty = document.createElement('option');
+          empty.value = '';
+          empty.textContent = 'No index files found';
+          selector.appendChild(empty);
+          activeUid = '';
+          el('top-workspace-path').textContent = 'No local indexes found';
         }
       } catch (err) {
         console.warn('Load failed', err);
       }
     }
+
+    function selectIndex(uid) {
+      var item = indexes.find(function(index) { return index.metadata.uid === uid; });
+      if (!item) return;
+      activeUid = uid;
+      localStorage.setItem('codebase_index_uid', uid);
+      el('top-workspace-path').textContent = item.metadata.workspaceRoot;
+      el('nav-dep-graph').href = '/graph/' + encodeURIComponent(uid);
+      renderOverview(item);
+      loadAllPanels(uid);
+    }
+
+    el('index-select').addEventListener('change', function(event) {
+      selectIndex(event.target.value);
+    });
 
     function renderOverview(item) {
       var m = item.metadata;
