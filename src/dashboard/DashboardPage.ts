@@ -5,7 +5,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Codebase Index Dashboard</title>
   <style>
-    :root {
+    :root, [data-theme="light"] {
       color-scheme: light;
       --bg: #f2f5f1;
       --surface: #fbfcfa;
@@ -19,77 +19,99 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
       --neutral: #5a655e;
       --ink: #1f2824;
       --shadow: 0 12px 28px rgba(20, 30, 24, 0.08);
-      --radius-xl: 26px;
-      --radius-lg: 18px;
-      --radius-md: 12px;
+      --input-bg: #ffffff;
+      --card-bg: rgba(255,255,255,0.86);
+      --rail-bg: rgba(255,255,255,0.74);
       --mono: "SFMono-Regular", "Consolas", monospace;
       --sans: "Segoe UI", "Inter", sans-serif;
     }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #111917;
+      --surface: #18231f;
+      --surface-strong: #1f2d28;
+      --surface-muted: #15201c;
+      --line: #2e3e37;
+      --primary: #61d6ad;
+      --primary-strong: #3ebf92;
+      --secondary: #70b7e3;
+      --accent: #d4f46c;
+      --neutral: #9aa99f;
+      --ink: #e7eee8;
+      --shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+      --input-bg: #1c2923;
+      --card-bg: rgba(25, 35, 31, 0.88);
+      --rail-bg: rgba(22, 31, 27, 0.82);
+    }
     * { box-sizing: border-box; }
-    html, body { min-height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); }
+    html, body { min-height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); transition: background 0.25s ease, color 0.25s ease; }
     body { padding: 18px; }
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
     a { color: inherit; }
     .app-shell { max-width: 1500px; margin: 0 auto; display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 22px; }
     .rail {
-      background: rgba(255,255,255,0.74); backdrop-filter: blur(12px); border: 1px solid var(--line); border-radius: var(--radius-xl);
+      background: var(--rail-bg); backdrop-filter: blur(12px); border: 1px solid var(--line); border-radius: 26px;
       box-shadow: var(--shadow); padding: 18px 14px; min-height: calc(100vh - 36px);
     }
     .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
     .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; }
     .mark {
       width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; background: linear-gradient(135deg, var(--primary), var(--primary-strong));
-      color: var(--accent); font-family: var(--mono); font-weight: 700;
+      color: #111917; font-family: var(--mono); font-weight: 700;
     }
     .pill {
       display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 999px; background: var(--surface-muted); border: 1px solid var(--line);
       padding: 5px 10px; color: var(--neutral); font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
     }
+    .theme-switcher { display: flex; gap: 4px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; padding: 3px; margin-bottom: 14px; }
+    .theme-btn { flex: 1; border: none; background: transparent; color: var(--neutral); border-radius: 8px; padding: 5px 0; font-size: 11px; cursor: pointer; text-align: center; font-family: var(--mono); }
+    .theme-btn.active { background: var(--surface-strong); color: var(--primary); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .sidebar-filter { display: block; margin: 10px 0 16px; }
     .sidebar-filter input {
-      width: 100%; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); height: 38px; padding: 0 12px; outline: none; color: var(--ink);
+      width: 100%; border: 1px solid var(--line); border-radius: 12px; background: var(--input-bg); height: 38px; padding: 0 12px; outline: none; color: var(--ink);
     }
-    .sidebar-filter input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(27,102,90,0.12); }
+    .sidebar-filter input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(97,214,173,0.2); }
     .index-list { display: grid; gap: 6px; }
     .index-item {
       display: block; width: 100%; text-align: left; border: 1px solid transparent; border-radius: 14px; background: transparent; color: var(--ink);
       padding: 10px 12px; cursor: pointer; transition: background 0.18s ease, border-color 0.18s ease;
     }
-    .index-item:hover { background: rgba(27,102,90,0.04); border-color: rgba(27,102,90,0.15); }
-    .index-item.active { background: rgba(27,102,90,0.1); border-color: rgba(27,102,90,0.2); }
-    .index-group { background: rgba(79,122,164,0.04); }
+    .index-item:hover { background: rgba(97,214,173,0.08); border-color: var(--line); }
+    .index-item.active { background: rgba(97,214,173,0.15); border-color: var(--primary); }
+    .index-group { background: rgba(112,183,227,0.06); }
     .index-part { margin-left: 14px; }
     .group-caret { display: inline-block; width: 12px; }
     .index-name { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .index-path { display: block; margin-top: 4px; color: var(--neutral); font-family: var(--mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-header { margin-top: 18px; padding: 0 8px; font-size: 10px; color: var(--neutral); letter-spacing: 0.12em; text-transform: uppercase; font-family: var(--mono); }
-    .nav-list { display: grid; gap: 6px; margin-top: 10px; }
+    .nav-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     .nav-chip {
-      display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px; border-radius: 999px; background: var(--surface-muted);
+      display: inline-flex; align-items: center; justify-content: center; padding: 6px 10px; border-radius: 999px; background: var(--surface-muted);
       border: 1px solid var(--line); font-size: 11px; font-weight: 600; color: var(--ink);
     }
     .main-panel { min-width: 0; }
     .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
-    .topbar h1 { margin: 0; font-size: clamp(2rem, 2.6vw, 2.8rem); }
+    .topbar h1 { margin: 0; font-size: clamp(1.8rem, 2.5vw, 2.6rem); }
     .workspace-path { margin-top: 8px; color: var(--neutral); font-family: var(--mono); font-size: 11px; }
     .updated { color: var(--neutral); font-family: var(--mono); font-size: 11px; padding-top: 10px; }
     .searchbar {
-      display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,0.82); border: 1px solid var(--line); border-radius: 18px;
+      display: flex; align-items: center; gap: 12px; background: var(--card-bg); border: 1px solid var(--line); border-radius: 18px;
       box-shadow: var(--shadow); padding: 12px 16px; min-height: 62px; margin-bottom: 18px;
     }
     .search-icon { font-size: 20px; color: var(--primary); }
     .searchbar input {
       flex: 1; border: none; background: transparent; color: var(--ink); font-size: 15px; outline: none;
     }
+    .search-select { border: 1px solid var(--line); background: var(--input-bg); color: var(--ink); border-radius: 10px; padding: 4px 8px; font-size: 12px; }
     .search-hint { color: var(--neutral); font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
-    .metrics { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .metrics { display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: 12px; margin-bottom: 18px; }
     .metric-card {
-      background: rgba(255,255,255,0.86); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 16px 18px;
+      background: var(--card-bg); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 16px 18px;
     }
-    .metric-value { font-family: var(--mono); font-size: clamp(1.3rem, 2vw, 2rem); font-weight: 700; }
+    .metric-value { font-family: var(--mono); font-size: clamp(1.3rem, 2vw, 2rem); font-weight: 700; color: var(--primary); }
     .metric-label { margin-top: 6px; font-family: var(--mono); color: var(--neutral); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
     .card {
-      background: rgba(255,255,255,0.86); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 16px 18px;
+      background: var(--card-bg); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 16px 18px;
     }
     .section-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); padding-bottom: 8px;
@@ -103,47 +125,49 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
     .bar-track { height: 10px; border-radius: 999px; background: var(--surface-muted); overflow: hidden; }
     .bar-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--primary), var(--secondary)); }
     .bar-value { text-align: right; }
-    .graph-wrap { position: relative; min-height: 290px; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(180deg, rgba(27,102,90,0.03), rgba(79,122,164,0.02)); overflow: hidden; }
+    .graph-wrap { position: relative; min-height: 290px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-muted); overflow: hidden; }
     .graph-wrap svg { display: block; width: 100%; height: 290px; }
     .graph-empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--neutral); font-family: var(--mono); font-size: 11px; }
-    .graph-edge { stroke: rgba(27,102,90,0.55); stroke-width: 1.2; }
+    .graph-edge { stroke: var(--primary); stroke-width: 1.2; stroke-opacity: 0.6; }
     .graph-node { fill: var(--accent); stroke: var(--primary); stroke-width: 1.2; }
     .graph-label { font: 9px var(--mono); fill: var(--ink); }
     .graph-note { margin-top: 8px; font-family: var(--mono); font-size: 11px; color: var(--neutral); }
-    .graph-link { color: var(--primary); font-family: var(--mono); font-size: 11px; text-decoration: none; border-bottom: 1px solid rgba(27,102,90,0.25); }
+    .graph-link { color: var(--primary); font-family: var(--mono); font-size: 11px; text-decoration: none; border-bottom: 1px solid var(--line); }
     .relation-breakdown { margin-top: 18px; }
     .relation-bars { display: grid; gap: 8px; }
     .relation-row { display: grid; grid-template-columns: 100px minmax(60px, 1fr) 42px; gap: 8px; align-items: center; font-family: var(--mono); font-size: 10px; }
     .relation-name { color: var(--neutral); }
     .relation-track { height: 8px; background: var(--surface-muted); border-radius: 999px; overflow: hidden; }
     .relation-fill { height: 100%; border-radius: inherit; }
-    .intel-grid { display: grid; grid-template-columns: repeating-linear-gradient(0deg, var(--line), var(--line) 1px, transparent 1px, transparent 0); gap: 18px; margin-top: 18px; }
-    .intel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .intel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 18px; }
     .intel-list { display: grid; gap: 6px; }
     .intel-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; font-family: var(--mono); font-size: 11px; border-bottom: 1px solid var(--line); padding: 8px 0; }
     .intel-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
     .intel-kind, .endpoint-method { display: inline-flex; align-items: center; justify-content: center; min-width: 52px; padding: 3px 6px; border-radius: 999px; font-weight: 700; }
-    .intel-kind { background: rgba(27,102,90,0.12); color: var(--primary); }
-    .endpoint-method { background: rgba(79,122,164,0.12); color: var(--secondary); }
+    .intel-kind { background: rgba(97,214,173,0.15); color: var(--primary); }
+    .endpoint-method { background: rgba(112,183,227,0.15); color: var(--secondary); }
     .intel-meta { color: var(--neutral); }
     .status, .empty { color: var(--neutral); font-family: var(--mono); font-size: 12px; }
     .result-row { display: grid; grid-template-columns: minmax(180px, 1.3fr) minmax(260px, 2fr) 54px 88px; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); align-items: start; }
     .result-location { font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
     .result-location small { display: block; margin-top: 4px; color: var(--neutral); }
-    .result-excerpt { font-family: var(--mono); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; color: #2e3b36; }
+    .result-excerpt { font-family: var(--mono); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; color: var(--ink); opacity: 0.9; }
     .result-score { text-align: right; font-family: var(--mono); font-weight: 600; color: var(--primary); }
     .result-graph { color: var(--primary); font-family: var(--mono); font-size: 11px; text-align: right; text-decoration: none; }
-    .table-wrap { overflow: auto; }
+    .table-wrap { overflow: auto; max-height: 380px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-    th { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--neutral); font-family: var(--mono); }
+    th { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--neutral); font-family: var(--mono); position: sticky; top: 0; background: var(--surface); }
     td { font-size: 12px; font-family: var(--mono); }
     .table-empty { color: var(--neutral); }
     .metric-boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
     .metric-box { background: var(--surface-muted); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
     .metric-box span { display: block; color: var(--neutral); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; font-family: var(--mono); }
-    .metric-box strong { display: block; margin-top: 6px; font-family: var(--mono); font-size: 14px; }
+    .metric-box strong { display: block; margin-top: 6px; font-family: var(--mono); font-size: 14px; color: var(--primary); }
     .results { margin-top: 18px; }
+    .export-btns { display: flex; gap: 8px; }
+    .btn-action { background: var(--surface-muted); border: 1px solid var(--line); color: var(--ink); border-radius: 10px; padding: 6px 12px; font-family: var(--mono); font-size: 11px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-action:hover { border-color: var(--primary); color: var(--primary); }
     .spinner { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--primary); border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (max-width: 1100px) { .app-shell { grid-template-columns: 1fr; } .rail { min-height: auto; } .metrics { grid-template-columns: repeat(2, minmax(120px, 1fr)); } .dashboard-grid, .intel-grid { grid-template-columns: 1fr; } }
@@ -153,7 +177,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
       .result-row { grid-template-columns: minmax(0, 1fr) 52px; }
       .result-excerpt { grid-column: 1 / -1; }
       .result-score, .result-graph { text-align: left; }
-      .searchbar { padding: 10px 12px; }
+      .searchbar { padding: 10px 12px; flex-wrap: wrap; }
     }
   </style>
 </head>
@@ -164,6 +188,13 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         <div class="brand"><span class="mark">CI</span><span>Codebase Index</span></div>
         <span class="pill" id="health">Local</span>
       </div>
+
+      <div class="theme-switcher">
+        <button type="button" class="theme-btn" data-theme-set="light">☀️ Light</button>
+        <button type="button" class="theme-btn" data-theme-set="dark">🌙 Dark</button>
+        <button type="button" class="theme-btn" data-theme-set="system">💻 System</button>
+      </div>
+
       <div class="nav-header">Index collection</div>
       <label class="sidebar-filter"><input id="index-filter" type="search" placeholder="Filter workspaces" autocomplete="off"></label>
       <nav class="index-list" id="index-list"></nav>
@@ -178,7 +209,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         <span class="nav-chip">Search</span>
         <span class="nav-chip">APIs</span>
         <span class="nav-chip">Security</span>
-        <span class="nav-chip">Inspector</span>
+        <span class="nav-chip">Memory</span>
       </div>
     </aside>
 
@@ -189,29 +220,40 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
           <h1 id="title">All workspaces</h1>
           <div id="workspace-path" class="workspace-path">Search across every discovered index</div>
         </div>
-        <div id="updated" class="updated">Index status</div>
+        <div style="text-align:right;">
+          <div id="updated" class="updated">Index status</div>
+          <div id="export-controls" class="export-btns" style="margin-top:8px; justify-content:flex-end;">
+            <a id="export-json" class="btn-action" href="#" download>Export JSON</a>
+            <a id="export-csv" class="btn-action" href="#" download>Export CSV</a>
+          </div>
+        </div>
       </div>
 
       <section class="card" aria-labelledby="github-heading" style="margin-bottom:18px; padding:18px 20px;">
         <div class="section-head" style="margin-bottom:10px;"><h2 id="github-heading">Index a GitHub repository</h2><span>local import</span></div>
         <form id="github-form" style="display:grid; grid-template-columns: minmax(200px, 1fr) minmax(120px, 180px) minmax(120px, 180px) auto; gap: 10px;">
-          <input id="github-url" type="url" placeholder="https://github.com/owner/repository" autocomplete="url" required style="height:40px; border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:0 12px; outline:none;">
-          <input id="github-ref" type="text" placeholder="Default branch" aria-label="Branch or tag" style="height:40px; border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:0 12px; outline:none;">
-          <input id="github-size" type="number" min="0.001" max="100" step="0.001" value="1" aria-label="Maximum file size in megabytes" title="Maximum file size in megabytes" style="height:40px; border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:0 12px; outline:none;">
-          <button id="github-submit" type="submit" style="height:40px; border:none; border-radius:12px; background:linear-gradient(135deg, var(--primary), var(--primary-strong)); color:white; font-weight:600; cursor:pointer; padding:0 16px;">Index repository</button>
+          <input id="github-url" type="url" placeholder="https://github.com/owner/repository" autocomplete="url" required style="height:40px; border:1px solid var(--line); border-radius:12px; background:var(--input-bg); color:var(--ink); padding:0 12px; outline:none;">
+          <input id="github-ref" type="text" placeholder="Default branch" aria-label="Branch or tag" style="height:40px; border:1px solid var(--line); border-radius:12px; background:var(--input-bg); color:var(--ink); padding:0 12px; outline:none;">
+          <input id="github-size" type="number" min="0.001" max="100" step="0.001" value="1" aria-label="Maximum file size in megabytes" title="Maximum file size in megabytes" style="height:40px; border:1px solid var(--line); border-radius:12px; background:var(--input-bg); color:var(--ink); padding:0 12px; outline:none;">
+          <button id="github-submit" type="submit" style="height:40px; border:none; border-radius:12px; background:linear-gradient(135deg, var(--primary), var(--primary-strong)); color:#111917; font-weight:700; cursor:pointer; padding:0 16px;">Index repository</button>
         </form>
         <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(250px,1.5fr); gap:10px; margin-top:10px;">
-          <input id="github-patterns" type="text" placeholder="Ignore patterns, comma-separated (optional)" aria-label="Ignore patterns" style="height:40px; border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:0 12px; outline:none;">
-          <div style="display:flex; align-items:center; justify-content:center; color:var(--neutral); font-family:var(--mono); font-size:11px; text-align:center;">Private repos use GITHUB_TOKEN or GH_TOKEN from the dashboard environment</div>
+          <input id="github-patterns" type="text" placeholder="Ignore patterns, comma-separated (optional)" aria-label="Ignore patterns" style="height:40px; border:1px solid var(--line); border-radius:12px; background:var(--input-bg); color:var(--ink); padding:0 12px; outline:none;">
+          <div style="display:flex; align-items:center; justify-content:center; color:var(--neutral); font-family:var(--mono); font-size:11px; text-align:center;">Private repos use GITHUB_TOKEN or GH_TOKEN from environment</div>
         </div>
-        <div id="github-job" hidden class="card" style="margin-top:12px; padding:12px 14px; background: rgba(255,255,255,0.9);">
+        <div id="github-job" hidden class="card" style="margin-top:12px; padding:12px 14px; background: var(--surface-strong);">
           <div class="section-head" style="margin-bottom:10px;"><span id="github-job-state">Preparing import…</span><a id="github-result" href="#" target="_blank" rel="noopener" hidden style="color:var(--primary); font-family:var(--mono); font-size:11px; text-decoration:none;">Open indexed graph</a></div>
           <progress id="github-progress" max="100" hidden style="width:100%; height:6px;"></progress>
-          <div id="github-log" role="log" aria-live="polite" style="height:150px; overflow:auto; margin-top:10px; background:#1f2623; color:#e7efe8; border-radius:12px; padding:10px; font-family:var(--mono); font-size:10px; line-height:1.7;"></div>
+          <div id="github-log" role="log" aria-live="polite" style="height:150px; overflow:auto; margin-top:10px; background:#19231f; color:#e7efe8; border-radius:12px; padding:10px; font-family:var(--mono); font-size:10px; line-height:1.7;"></div>
         </div>
       </section>
 
-      <label class="searchbar"><span class="search-icon">⌕</span><input id="query" type="search" placeholder="Search files, symbols, and indexed terms" autocomplete="off"><span class="search-hint">Live Search</span></label>
+      <label class="searchbar">
+        <span class="search-icon">⌕</span>
+        <input id="query" type="search" placeholder="Search files, symbols, and indexed terms" autocomplete="off">
+        <select id="search-lang" class="search-select"><option value="">All Languages</option></select>
+        <span class="search-hint">Live Search</span>
+      </label>
 
       <div id="metrics" class="metrics"></div>
 
@@ -253,6 +295,11 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
       <section class="card results">
         <div class="section-head"><h2>Search results</h2><span id="result-count">Type to search indexed files</span></div>
         <div id="results"><div class="status">Search is performed locally against the saved index data.</div></div>
+      </section>
+
+      <section class="card results">
+        <div class="section-head"><h2>System & Memory Stats</h2><span>realtime process metrics</span></div>
+        <div id="memory-stats" class="metric-boxes"></div>
       </section>
 
       <section class="card results">
@@ -303,8 +350,27 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
     var githubEvents;
     var svgNamespace = 'http://www.w3.org/2000/svg';
     var countKeys = [['fileCount', 'Files'], ['symbolCount', 'Symbols'], ['relationCount', 'Relations'], ['chunkCount', 'Chunks'], ['vectorCount', 'Vectors']];
-    var relationColors = { calls: '#176b58', imports: '#467e9b', references: '#c39228', contains: '#8a958d', extends: '#e16a4b', implements: '#9b72a2', exports: '#d16483' };
+    var relationColors = { calls: '#61d6ad', imports: '#70b7e3', references: '#f4c95d', contains: '#9aa99f', extends: '#ff8868', implements: '#bd98f2', exports: '#ee8dbe' };
     var numberFormat = new Intl.NumberFormat();
+
+    function applyTheme(theme) {
+      if (theme === 'system') {
+        var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+      } else {
+        document.documentElement.setAttribute('data-theme', theme);
+      }
+      localStorage.setItem('codebase_theme', theme);
+      document.querySelectorAll('.theme-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-theme-set') === theme);
+      });
+    }
+
+    var savedTheme = localStorage.getItem('codebase_theme') || 'system';
+    applyTheme(savedTheme);
+    document.querySelectorAll('.theme-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() { applyTheme(btn.getAttribute('data-theme-set')); });
+    });
 
     function element(id) { return document.getElementById(id); }
     function makeSvg(name, attributes) {
@@ -438,6 +504,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         renderOverview();
         renderSelectedGraph();
         renderSearch();
+        void loadSystemMemory();
         element('health').textContent = 'READY';
         element('load-errors').replaceChildren();
         (payload.errors || []).forEach(function(issue) {
@@ -449,6 +516,31 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
       } catch (error) {
         element('health').textContent = 'FAILED';
         element('load-errors').textContent = String(error);
+      }
+    }
+
+    async function loadSystemMemory() {
+      try {
+        var response = await fetch('/api/system/memory');
+        var data = await response.json();
+        var container = element('memory-stats');
+        if (container && data) {
+          container.innerHTML = '';
+          var entries = [
+            ['Process RSS', data.rssMb + ' MB'],
+            ['Heap Used', data.heapUsedMb + ' / ' + data.heapTotalMb + ' MB'],
+            ['External', data.externalMb + ' MB'],
+            ['Cached Indexes', String(data.cacheSize)]
+          ];
+          entries.forEach(function(entry) {
+            var box = document.createElement('div');
+            box.className = 'metric-box';
+            box.innerHTML = '<span>' + entry[0] + '</span><strong>' + entry[1] + '</strong>';
+            container.appendChild(box);
+          });
+        }
+      } catch (error) {
+        console.warn('Memory stats unavailable', error);
       }
     }
 
@@ -547,6 +639,16 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
       element('workspace-path').textContent = selected ? selected.metadata.workspaceRoot : selectedRepo ? numberFormat.format(selectedRepo.items.length) + ' index parts · aggregate totals' : 'Search across every discovered index';
       element('updated').textContent = selected ? 'Updated ' + new Date(selected.metadata.updatedAt).toLocaleString() : selectedRepo ? selectedRepo.items.length + ' parts' : indexes.length + ' index parts';
       element('composition-label').textContent = selected ? 'Selected index' : selectedRepo ? 'Repository total' : 'All indexes';
+
+      var exportControls = element('export-controls');
+      if (selected) {
+        exportControls.style.display = 'flex';
+        element('export-json').href = '/api/indexes/' + encodeURIComponent(selected.metadata.uid) + '/export?format=json';
+        element('export-csv').href = '/api/indexes/' + encodeURIComponent(selected.metadata.uid) + '/export?format=csv';
+      } else {
+        exportControls.style.display = 'none';
+      }
+
       var maximum = Math.max(1, ...values.map(function(item) { return item.value; }));
       var bars = element('bars');
       bars.replaceChildren();
@@ -600,7 +702,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         track.className = 'relation-track';
         var fill = document.createElement('div');
         fill.className = 'relation-fill';
-        fill.style.background = relationColors[entry.kind] || '#176b58';
+        fill.style.background = relationColors[entry.kind] || '#61d6ad';
         fill.style.width = (entry.count / maximum * 100) + '%';
         track.appendChild(fill);
         var value = document.createElement('span');
@@ -620,7 +722,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         element('endpoint-count').textContent = '0 endpoints';
         var areaEmpty = document.createElement('div');
         areaEmpty.className = 'empty';
-        areaEmpty.textContent = 'Select one workspace to inspect its architecture.';
+        areaEmpty.textContent = 'Select one workspace to inspect architecture.';
         areaList.appendChild(areaEmpty);
         var endpointEmpty = document.createElement('div');
         endpointEmpty.className = 'empty';
@@ -683,13 +785,26 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         const fileTable = element('file-table-body');
         if (fileTable) {
           fileTable.innerHTML = '';
-          const files = Array.isArray(filePayload.files) ? filePayload.files.slice(0, 8) : [];
+          const files = Array.isArray(filePayload.files) ? filePayload.files : [];
+          const languages = [...new Set(files.map(f => f.language))].sort();
+          const langSelect = element('search-lang');
+          if (langSelect) {
+            const currentLang = langSelect.value;
+            langSelect.innerHTML = '<option value="">All Languages</option>';
+            languages.forEach(lang => {
+              const opt = document.createElement('option');
+              opt.value = lang;
+              opt.textContent = lang;
+              if (lang === currentLang) opt.selected = true;
+              langSelect.appendChild(opt);
+            });
+          }
           if (!files.length) {
             fileTable.innerHTML = '<tr><td colspan="5" class="table-empty">No files indexed</td></tr>';
           } else {
-            files.forEach(function(file) {
+            files.slice(0, 15).forEach(function(file) {
               const row = document.createElement('tr');
-              row.innerHTML = '<td>' + file.path + '</td><td>' + file.language + '</td><td>' + numberFormat.format(file.size || 0) + '</td><td>' + ((file.terms || []).length) + '</td><td>' + new Date(file.modifiedAt || 0).toLocaleDateString() + '</td>';
+              row.innerHTML = '<td>' + file.path + '</td><td><span class="pill" style="font-size:9px;">' + file.language + '</span></td><td>' + numberFormat.format(file.size || 0) + ' B</td><td>' + ((file.terms || []).length) + '</td><td>' + new Date(file.modifiedAt || 0).toLocaleDateString() + '</td>';
               fileTable.appendChild(row);
             });
           }
@@ -700,13 +815,13 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         const symbolTable = element('symbol-table-body');
         if (symbolTable) {
           symbolTable.innerHTML = '';
-          const symbols = Array.isArray(symbolPayload.symbols) ? symbolPayload.symbols.slice(0, 8) : [];
+          const symbols = Array.isArray(symbolPayload.symbols) ? symbolPayload.symbols.slice(0, 15) : [];
           if (!symbols.length) {
             symbolTable.innerHTML = '<tr><td colspan="5" class="table-empty">No symbols indexed</td></tr>';
           } else {
             symbols.forEach(function(symbol) {
               const row = document.createElement('tr');
-              row.innerHTML = '<td>' + symbol.name + '</td><td>' + symbol.kind + '</td><td>' + symbol.filePath + '</td><td>' + symbol.startLine + '</td><td>' + (symbol.parentId || '—') + '</td>';
+              row.innerHTML = '<td><strong>' + symbol.name + '</strong></td><td><span class="intel-kind" style="font-size:9px;">' + symbol.kind + '</span></td><td>' + symbol.filePath + '</td><td>' + symbol.startLine + '</td><td>' + (symbol.parentId || '—') + '</td>';
               symbolTable.appendChild(row);
             });
           }
@@ -717,13 +832,13 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
         const securityTable = element('security-table-body');
         if (securityTable) {
           securityTable.innerHTML = '';
-          const findings = Array.isArray(securityPayload.findings) ? securityPayload.findings.slice(0, 8) : [];
+          const findings = Array.isArray(securityPayload.findings) ? securityPayload.findings.slice(0, 10) : [];
           if (!findings.length) {
-            securityTable.innerHTML = '<tr><td colspan="4" class="table-empty">No sensitive findings</td></tr>';
+            securityTable.innerHTML = '<tr><td colspan="4" class="table-empty">No sensitive findings detected</td></tr>';
           } else {
             findings.forEach(function(finding) {
               const row = document.createElement('tr');
-              row.innerHTML = '<td>' + finding.kind + '</td><td>' + finding.filePath + ':' + finding.line + '</td><td>' + Number(finding.confidence || 0).toFixed(2) + '</td><td>[REDACTED]</td>';
+              row.innerHTML = '<td><span class="pill" style="color:var(--coral);">' + finding.kind + '</span></td><td>' + finding.filePath + ':' + finding.line + '</td><td>' + Number(finding.confidence || 0).toFixed(2) + '</td><td>[REDACTED]</td>';
               securityTable.appendChild(row);
             });
           }
@@ -811,6 +926,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
 
     async function renderSearch() {
       var query = element('query').value.trim();
+      var lang = element('search-lang') ? element('search-lang').value : '';
       var container = element('results');
       if (query.length < 2) {
         element('result-count').textContent = 'Type at least 2 characters';
@@ -820,7 +936,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
       if (searchController) searchController.abort();
       searchController = new AbortController();
       container.innerHTML = '<div class="status"><span class="spinner"></span>Searching indexes…</div>';
-      var url = '/api/search?q=' + encodeURIComponent(query) + '&limit=50' + (selectedUid ? '&index=' + encodeURIComponent(selectedUid) : selectedGroup ? '&group=' + encodeURIComponent(selectedGroup) : '');
+      var url = '/api/search?q=' + encodeURIComponent(query) + '&limit=50' + (selectedUid ? '&index=' + encodeURIComponent(selectedUid) : selectedGroup ? '&group=' + encodeURIComponent(selectedGroup) : '') + (lang ? '&language=' + encodeURIComponent(lang) : '');
       try {
         var response = await fetch(url, { signal: searchController.signal });
         var payload = await response.json();
@@ -865,6 +981,7 @@ export const DASHBOARD_PAGE = String.raw`<!doctype html>
     }
 
     element('query').addEventListener('input', function() { clearTimeout(searchTimer); searchTimer = setTimeout(renderSearch, 180); });
+    if (element('search-lang')) element('search-lang').addEventListener('change', renderSearch);
     element('index-filter').addEventListener('input', renderIndexList);
     element('github-form').addEventListener('submit', startGitHubIndex);
     element('refresh').addEventListener('click', refreshIndexes);

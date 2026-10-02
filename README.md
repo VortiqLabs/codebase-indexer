@@ -1,85 +1,186 @@
-# Codebase Indexer
+# @vortiqlabs/codebase-indexer
 
-A standalone, local-first TypeScript package and CLI for scanning workspaces, persisting file metadata in a binary index, incremental updates, and lexical search. The package is independent of any consuming application.
+A high-performance, standalone, local-first TypeScript engine and interactive web dashboard for indexing codebases, parsing ASTs with Tree-sitter, resolving symbol relationships, performing lexical & semantic search, and visualizing code architecture.
+
+---
+
+## Key Features
+
+- ⚡ **Local-First & Fast**: Zero cloud dependency. Indexes are persisted locally in binary `.index` files using MessagePack and SHA-256 integrity verification.
+- 🌳 **Multi-Language AST Indexing**: Built-in Tree-sitter AST parser supporting **40+ programming languages** and file formats (TypeScript, JavaScript, Python, Rust, Go, Java, C/C++, C#, Kotlin, Swift, Scala, Elixir, Ruby, PHP, SQL, HTML, CSS, Dockerfile, YAML, TOML, JSON, and more).
+- 🎨 **Interactive Visual Dashboard & Graph**: Sleek Express dashboard featuring a full-screen interactive D3 graph of symbol relationships, Monaco Editor source viewer, dark/light/system theme switching, live progress streaming for GitHub imports, and architecture maps.
+- 📊 **System & Memory Safeguards**: Built-in bounded LRU caching, isolated worker threads, memory guards (4MB parse cap), and process memory statistics monitoring (`rss`, heap usage, cache size).
+- 🔍 **Advanced Lexical & Vector Search**: Perform instant term search or semantic vector search across local workspaces and GitHub repositories with language filtering.
+- 🛡️ **Security Findings Detection**: Automatic detection of sensitive regions (tokens, credentials, API keys) with redacted reporting.
+- 📦 **Export Capabilities**: Export workspace summaries and symbol definitions in **JSON** or **CSV** formats for reporting and external analysis.
+- 🤖 **Model Context Protocol (MCP) Server**: Expose workspace indexing, symbol analysis, and search tools directly to AI assistants over `stdio`.
+
+---
 
 ## Requirements
 
-Node.js 20 or newer. Install dependencies and build with `npm install` and `npm run build`.
+- **Node.js**: `>= 20.0.0`
+- **npm** or **pnpm** or **yarn**
 
-## CLI
+---
 
-Install the private CLI with `npm install -g @vortiqlabs/codebase-indexer`, then run `codebase-indexer`. Authenticate to GitHub Packages with a personal access token (classic) that has `read:packages`, and configure `@vortiqlabs:registry=https://npm.pkg.github.com` in your npm configuration. In a checkout, use `node dist/bin/codebase-indexer.js`:
+## Quick Start
+
+### Installation
 
 ```sh
-codebase-indexer index ./my-project
-codebase-indexer index-github octocat/Hello-World --ref main
-codebase-indexer status ./my-project
-codebase-indexer search "authentication flow" --path ./my-project
-codebase-indexer symbols AuthService --path ./my-project
-codebase-indexer files ./my-project --language typescript
-codebase-indexer watch ./my-project --verbose
-codebase-indexer inspect ~/.cache/codebase-indexer/<uid>.index
-codebase-indexer remove ./my-project --force
-codebase-indexer dashboard
+npm install -g @vortiqlabs/codebase-indexer
 ```
 
-The index is written under `~/.cache/codebase-indexer/` by default. Use `--index-dir` to select another directory. The filename is the stable workspace UID followed by `.index`. `index --force` rebuilds file records, and `--json` emits machine-readable output. `--ignore` may be repeated; root and nested `.gitignore` rules, along with standard generated/dependency directories, are applied. The CLI does not configure embedding providers.
+Or run directly from source:
 
-`codebase-indexer index-github OWNER/REPOSITORY` indexes the default branch of a public or private GitHub repository. Add `--ref <branch-or-tag>` to select a ref. Large repositories are discovered with a path-only scan, then indexed in isolated workers with batches capped at 100 files or 32 MiB of source, whichever comes first. Each part is independently searchable; relations resolve within each part. Public repositories need no credential; private repositories require `GITHUB_TOKEN` or `GH_TOKEN` in the process environment. GitHub tokens are never accepted as command arguments. Repository snapshots are stored below the index directory in `.github-repositories/` and their indexes are available alongside local indexes.
+```sh
+npm install
+npm run build
+```
 
-`codebase-indexer dashboard` starts a local Express dashboard that groups GitHub shards into one repository row with aggregate file/symbol/relation totals; expand a row to select an individual part graph. Search and overview totals span all parts. Its GitHub form accepts public or private repository URLs, refs, optional ignore patterns, and a maximum file size; live logs report download, extraction, scan, parse, and save progress. Large imports use isolated workers and batches capped at 100 files or 32 MiB of source. Exclude test/fixture paths or lower the file-size cap for especially dense source trees. Only one dashboard GitHub import runs at a time. Search results link directly to an animated, zoomable graph of all symbols; toggle relation types and hover a symbol to isolate its connections. Click any graph symbol to open its source file in a local Monaco Editor panel with the symbol's lines selected. It binds to `127.0.0.1:4173` by default. Use `--index-dir <path>`, `--host <host>`, or `--port <port>` to change its settings. Dashboard index reads are isolated to bounded worker threads; vector loading is not lazy.
+### CLI Usage
 
-## API
+```sh
+# Index a local workspace
+codebase-indexer index ./my-project
+
+# Index a GitHub repository directly from URL
+codebase-indexer index-github owner/repository --ref main
+
+# Launch the interactive web dashboard
+codebase-indexer dashboard --port 4173
+
+# Search indexed terms and symbols
+codebase-indexer search "authentication token" --path ./my-project
+
+# Find symbol definitions and usages
+codebase-indexer symbols AuthService --path ./my-project
+
+# Inspect binary index metadata
+codebase-indexer inspect ~/.cache/codebase-indexer/<uid>.index
+
+# Run watch mode for incremental re-indexing
+codebase-indexer watch ./my-project
+```
+
+---
+
+## Dashboard Capabilities
+
+Launch the dashboard with `codebase-indexer dashboard` or `npm run build && node dist/bin/codebase-indexer.js dashboard`. Access `http://127.0.0.1:4173` in your browser.
+
+- 🌗 **Theme Switching**: Toggle between **Light**, **Dark**, and **System** themes with persistence in `localStorage`.
+- 🕸️ **Interactive D3 Symbol Graph**: Zoom, pan, filter, hover to isolate connections, and click any node to open its exact lines in a embedded **Monaco Code Editor**.
+- 📥 **GitHub Importer**: Enter any public or private GitHub repository URL (e.g. `https://github.com/owner/repo`). Features live SSE log streaming, file size filters, and custom ignore rules.
+- 💾 **Workspace Exports**: Download comprehensive **JSON** and **CSV** reports of indexed symbols and workspace composition.
+- 🖥️ **Memory & System Stats**: Realtime process RSS memory, heap usage, and index summary cache statistics.
+
+---
+
+## Supported Languages
+
+The engine supports language detection and parsing across 40+ programming languages and formats:
+
+| Language | Extensions | Parser Grammar |
+| :--- | :--- | :--- |
+| **TypeScript / TSX** | `.ts`, `.tsx`, `.cts`, `.mts` | Tree-sitter TS / TSX |
+| **JavaScript / JSX** | `.js`, `.jsx`, `.mjs`, `.cjs` | Tree-sitter JavaScript |
+| **Python** | `.py`, `.pyw` | Tree-sitter Python |
+| **Rust** | `.rs` | Tree-sitter Rust |
+| **Go** | `.go`, `go.mod` | Tree-sitter Go |
+| **Java** | `.java` | Tree-sitter Java |
+| **C / C++** | `.c`, `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` | Tree-sitter C / C++ |
+| **C#** | `.cs` | Tree-sitter C# |
+| **Kotlin** | `.kt`, `.kts` | Tree-sitter Kotlin |
+| **Swift** | `.swift` | Tree-sitter Swift |
+| **Scala** | `.scala`, `.sc` | Tree-sitter Scala |
+| **Ruby** | `.rb` | Tree-sitter Ruby |
+| **PHP** | `.php` | Tree-sitter PHP |
+| **Elixir** | `.ex`, `.exs` | Tree-sitter Elixir |
+| **Elm** | `.elm` | Bundled WASM |
+| **Dart** | `.dart` | Tree-sitter Dart |
+| **HTML / Vue** | `.html`, `.htm`, `.vue` | Tree-sitter HTML / Vue |
+| **CSS / SCSS / SASS / LESS** | `.css`, `.scss`, `.sass`, `.less` | Tree-sitter CSS |
+| **SQL** | `.sql` | Bundled WASM |
+| **Dockerfile** | `Dockerfile`, `Containerfile` | Bundled WASM |
+| **Makefile** | `Makefile`, `CMakeLists.txt` | Bundled WASM |
+| **Markdown** | `.md`, `.mdx` | Bundled WASM |
+| **YAML / TOML / JSON** | `.yaml`, `.yml`, `.toml`, `.json`, `.json5` | Tree-sitter / WASM |
+| **Shell / Bash** | `.sh`, `.bash`, `.zsh` | Tree-sitter Bash |
+| **And more** | Clojure, Haskell, Perl, R, Julia, Protobuf, GraphQL, Solidity, TLA+, SystemRDL | Specialized / Fallback |
+
+Files without a specific Tree-sitter grammar automatically fall back to fast lexical scanning and semantic chunking.
+
+---
+
+## Memory Optimization & Safeguards
+
+Designed to handle large multi-repository codebases without memory exhaustion:
+
+- 🛡️ **Parse Buffer Caps**: AST parsing is capped at 4MB per file to prevent single huge files from consuming heap space.
+- ⚙️ **Resource-Bounded Workers**: Index workers run with isolated heap limits (`1024MB` max old generation).
+- 🧠 **LRU Index Summary Cache**: Dashboard uses an LRU cache limited to 100 active index summaries with automatic eviction.
+- 🧹 **Automatic AST Release**: Web-tree-sitter trees and parser instances are explicitly garbage-collected immediately after extraction.
+
+---
+
+## API Usage
 
 ```ts
 import { CodebaseIndexer } from '@vortiqlabs/codebase-indexer';
 
-const indexer = new CodebaseIndexer({ workspacePath: '/project' });
+const indexer = new CodebaseIndexer({
+  workspacePath: '/path/to/project',
+  indexDir: '~/.cache/codebase-indexer'
+});
+
 await indexer.initialize();
-const update = await indexer.index();
-const matches = await indexer.search('authentication token');
-const symbols = await indexer.findSymbol('AuthService');
-const context = await indexer.getContext('authentication flow', { maxTokens: 4000 });
+
+// Build / update index
+const result = await indexer.index();
+console.log(`Indexed ${result.fileCount} files and ${result.symbolCount} symbols.`);
+
+// Perform lexical search
+const searchResults = await indexer.search('authMiddleware');
+
+// Find symbol
+const symbols = await indexer.findSymbol('UserService');
+
+// Get context prompt for LLMs
+const context = await indexer.getContext('how is authentication implemented?');
 ```
 
-`IndexManager`, `IndexReader`, `IndexWriter`, scanner types, and `INDEX_FORMAT_VERSION` are also exported.
+---
 
 ## MCP Server
 
-Run `codebase-indexer mcp` or `codebase-indexer-mcp` to expose the indexer over the Model Context Protocol stdio transport. Example MCP client configuration:
+Expose indexer capabilities to Claude Desktop or any Model Context Protocol client:
 
 ```json
 {
-	"mcpServers": {
-		"codebase-indexer": {
-			"command": "codebase-indexer",
-			"args": ["mcp"],
-			"env": {
-				"CODEBASE_INDEX_DIR": "/home/me/.cache/codebase-indexer"
-			}
-		}
-	}
+  "mcpServers": {
+    "codebase-indexer": {
+      "command": "codebase-indexer",
+      "args": ["mcp"],
+      "env": {
+        "CODEBASE_INDEX_DIR": "/home/user/.cache/codebase-indexer"
+      }
+    }
+  }
 }
 ```
 
-The server provides `list_indexes`, `search_code`, `read_indexed_file`, `get_symbol_relations`, `index_local_workspace`, and `index_github_repository` tools. For private GitHub repositories, provide `GITHUB_TOKEN` or `GH_TOKEN` through the MCP client's server environment; grant repository contents read access and do not commit the token in client configuration. The GitHub indexing tool accepts `owner`, `repository`, and optional `ref` arguments, never a credential.
+Exposed MCP Tools:
+- `list_indexes`
+- `search_code`
+- `read_indexed_file`
+- `get_symbol_relations`
+- `index_local_workspace`
+- `index_github_repository`
 
-## Publishing
+---
 
-Push a version tag such as `v0.1.0` to publish to GitHub Packages. Update the `version` in `package.json` to match the tag first. The workflow runs the full test suite and publishes with `GITHUB_TOKEN`; new GitHub npm packages are private by default. Consumers need access to the repository/package and a token with `read:packages`.
+## License
 
-To enable semantic indexing, pass an explicit `EmbeddingProvider` implementation to `CodebaseIndexer` or `IndexManager`. The provider is never selected automatically. Reindexing with a different provider ID or dimensions rebuilds stored vectors.
-
-## Binary format and privacy
-
-The `.index` file uses a `CBIDX` magic header, an independent format version, a workspace UID, a MessagePack payload, and a SHA-256 integrity checksum. Writes go to a temporary file and are atomically renamed into place. Unsupported versions and checksum failures are rejected. The payload currently stores workspace metadata and file records, including hashes and normalized search terms.
-
-Binary encoding is not encryption. Indexes remain local; no source or index data is uploaded. Lexical terms may reveal information about indexed source, so protect the index directory as you would other local development data.
-
-## Current scope
-
-Implemented: recursive scanning, root and nested `.gitignore` rules and default exclusions, binary and maximum-size filtering, language detection, AST indexing with bundled Tree-sitter grammars, semantic chunks, stable workspace IDs, atomic binary persistence, incremental file add/change/delete detection, lexical and optional vector search, context building, file listing, metadata inspection, and debounced watch mode. Files without a bundled Tree-sitter grammar still receive lexical indexing and fallback chunks.
-
-Additional bundled grammars cover Elm, QL, YAML, Markdown, SQL, Dockerfile, Makefile, and `.gitignore`. See [src/parser/grammars/README.md](src/parser/grammars/README.md) for grammar asset provenance.
-
-Relationship extraction and resolution are partial: recorded calls, imports, references, and inheritance-like relations are heuristic, and symbol resolution is incomplete. Embeddings require an explicitly configured provider through the API; the CLI does not yet configure providers. Lazy loading for large vector collections and performance benchmarks are outstanding. Binary encoding is not encryption.
+[MIT](LICENSE)

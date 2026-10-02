@@ -65,12 +65,25 @@ let pixelRatio = window.devicePixelRatio || 1;
 let canvasWidth = 1;
 let canvasHeight = 1;
 
+function isLightTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'light';
+}
+
+function themeText() {
+  return isLightTheme() ? '#1f2824' : '#e7eee8';
+}
+
+function themeBg() {
+  return isLightTheme() ? '#f2f5f1' : '#111917';
+}
+
 function setText(id, value) {
-  document.getElementById(id).textContent = value;
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
 }
 
 function symbolColor(kind) {
-  return symbolColors[kind] || '#c1ccc4';
+  return symbolColors[kind] || (isLightTheme() ? '#1b665a' : '#c1ccc4');
 }
 
 function createSymbolIcon(kind) {
@@ -114,11 +127,9 @@ function drawSymbol(node, radius) {
   }
   context.fillStyle = symbolColor(node.kind);
   context.fill();
-  if (node.kind === 'type' || node.kind === 'module' || node.kind === 'property') {
-    context.strokeStyle = '#14201a';
-    context.lineWidth = 1;
-    context.stroke();
-  }
+  context.strokeStyle = isLightTheme() ? '#ffffff' : '#14201a';
+  context.lineWidth = 1;
+  context.stroke();
 }
 
 function getVisibleLabels() {
@@ -246,10 +257,10 @@ function draw() {
     }
     if (labels.has(node)) {
       context.font = (selected || hovered ? '600 11px' : '10px') + ' "IBM Plex Mono", monospace';
-      context.fillStyle = '#e7eee8';
+      context.fillStyle = themeText();
       const label = node.name.length > 30 ? node.name.slice(0, 29) + '…' : node.name;
       context.lineWidth = 3;
-      context.strokeStyle = '#111917';
+      context.strokeStyle = themeBg();
       context.strokeText(label, node.x + radius + 4, node.y + 3);
       context.fillText(label, node.x + radius + 4, node.y + 3);
     }
@@ -274,9 +285,11 @@ function showNode(node) {
   setText('selected-name', node.name);
   setText('selected-path', node.filePath);
   const kind = document.getElementById('selected-kind');
-  kind.className = 'selected-kind';
-  kind.style.backgroundColor = symbolColor(node.kind);
-  kind.replaceChildren(createSymbolIcon(node.kind), document.createTextNode(node.kind));
+  if (kind) {
+    kind.className = 'selected-kind';
+    kind.style.backgroundColor = symbolColor(node.kind);
+    kind.replaceChildren(createSymbolIcon(node.kind), document.createTextNode(node.kind));
+  }
   void openSource(node);
   draw();
 }
@@ -322,7 +335,7 @@ async function openSource(node) {
       monacoEditor = monaco.editor.create(editorHost, {
         value: '',
         language: 'plaintext',
-        theme: 'vs-dark',
+        theme: isLightTheme() ? 'vs' : 'vs-dark',
         readOnly: true,
         automaticLayout: true,
         minimap: { enabled: false },
@@ -360,8 +373,11 @@ async function openSource(node) {
 
 function closeSource() {
   sourceRequest++;
-  document.getElementById('source-dock').classList.remove('open');
-  document.getElementById('source-dock').setAttribute('aria-hidden', 'true');
+  const dock = document.getElementById('source-dock');
+  if (dock) {
+    dock.classList.remove('open');
+    dock.setAttribute('aria-hidden', 'true');
+  }
   document.body.classList.remove('source-open');
   if (monacoEditor) monacoEditor.blur();
 }
@@ -381,6 +397,8 @@ function fitGraph() {
 
 function renderLegend() {
   const legend = document.getElementById('relation-filters');
+  if (!legend) return;
+  legend.innerHTML = '';
   Object.entries(relationColors).forEach(([kind, color]) => {
     const count = links.filter((link) => link.kind === kind).length;
     const item = document.createElement('button');
@@ -412,6 +430,7 @@ function renderLegend() {
 
 function renderSymbolGuide() {
   const guide = document.getElementById('symbol-guide');
+  if (!guide) return;
   const kinds = [...new Set(nodes.map((node) => node.kind))].sort();
   kinds.forEach((kind) => {
     const item = document.createElement('span');
@@ -451,14 +470,33 @@ canvas.addEventListener('click', (event) => {
   const node = findNodeAt(event.clientX - bounds.left, event.clientY - bounds.top);
   if (node) showNode(node);
 });
-document.getElementById('find').addEventListener('input', (event) => {
-  filter = event.target.value.trim().toLowerCase();
-  draw();
-});
-document.getElementById('zoom-in').addEventListener('click', () => select(canvas).transition().call(zoomBehavior.scaleBy, 1.35));
-document.getElementById('zoom-out').addEventListener('click', () => select(canvas).transition().call(zoomBehavior.scaleBy, 0.74));
-document.getElementById('fit').addEventListener('click', fitGraph);
-document.getElementById('pause').addEventListener('click', (event) => {
+
+const findInput = document.getElementById('find');
+if (findInput) {
+  findInput.addEventListener('input', (event) => {
+    filter = event.target.value.trim().toLowerCase();
+    draw();
+  });
+}
+
+const themeToggleBtn = document.getElementById('theme-toggle');
+if (themeToggleBtn) {
+  themeToggleBtn.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('codebase_theme', next);
+    if (monacoEditor && window.monaco) {
+      window.monaco.editor.setTheme(next === 'light' ? 'vs' : 'vs-dark');
+    }
+    draw();
+  });
+}
+
+document.getElementById('zoom-in')?.addEventListener('click', () => select(canvas).transition().call(zoomBehavior.scaleBy, 1.35));
+document.getElementById('zoom-out')?.addEventListener('click', () => select(canvas).transition().call(zoomBehavior.scaleBy, 0.74));
+document.getElementById('fit')?.addEventListener('click', fitGraph);
+document.getElementById('pause')?.addEventListener('click', (event) => {
   if (!simulation) return;
   paused = !paused;
   if (paused) simulation.stop();
@@ -466,15 +504,20 @@ document.getElementById('pause').addEventListener('click', (event) => {
   const button = event.currentTarget;
   button.title = paused ? 'Resume layout animation' : 'Pause layout animation';
   button.setAttribute('aria-label', paused ? 'Resume animation' : 'Pause animation');
-  document.getElementById('pause-icon').innerHTML = paused
-    ? '<path d="m8 5 11 7-11 7z"></path>'
-    : '<path d="M8 5v14M16 5v14"></path>';
+  const pauseIcon = document.getElementById('pause-icon');
+  if (pauseIcon) {
+    pauseIcon.innerHTML = paused
+      ? '<path d="m8 5 11 7-11 7z"></path>'
+      : '<path d="M8 5v14M16 5v14"></path>';
+  }
 });
-document.getElementById('source-close').addEventListener('click', closeSource);
+
+document.getElementById('source-close')?.addEventListener('click', closeSource);
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeSource();
 });
-document.getElementById('show-all').addEventListener('click', () => {
+
+document.getElementById('show-all')?.addEventListener('click', () => {
   Object.keys(relationColors).forEach((kind) => visibleKinds.add(kind));
   rebuildNeighbors();
   document.querySelectorAll('.legend-item').forEach((item) => {
@@ -484,11 +527,14 @@ document.getElementById('show-all').addEventListener('click', () => {
   updateStatus();
   draw();
 });
+
 window.addEventListener('resize', resize);
-new ResizeObserver(resize).observe(document.getElementById('stage'));
+const stageEl = document.getElementById('stage');
+if (stageEl) new ResizeObserver(resize).observe(stageEl);
 
 renderLegend();
 resize();
+
 fetch('/api/indexes/' + encodeURIComponent(uid) + '?all=true')
   .then((response) => {
     if (!response.ok) throw new Error('Index not found');
@@ -505,21 +551,23 @@ fetch('/api/indexes/' + encodeURIComponent(uid) + '?all=true')
     setText('edge-count', links.length.toLocaleString());
     simulation = forceSimulation(nodes)
       .force('link', forceLink(links).id((node) => node.id).distance(82).strength(0.42))
-        .force('charge', forceManyBody().strength(-230).distanceMax(780))
+      .force('charge', forceManyBody().strength(-230).distanceMax(780))
       .force('center', forceCenter(canvasWidth / 2, canvasHeight / 2))
-        .force('collision', forceCollide(23).strength(0.9))
+      .force('collision', forceCollide(23).strength(0.9))
       .alphaDecay(0.025)
       .on('tick', draw);
     renderLegend();
-      renderSymbolGuide();
+    renderSymbolGuide();
     updateStatus();
-    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('loading')?.classList.add('hidden');
     setTimeout(fitGraph, 450);
   })
   .catch((error) => {
     const loading = document.getElementById('loading');
-    loading.classList.remove('hidden');
-    loading.innerHTML = '';
-    loading.classList.add('error');
-    loading.textContent = 'Could not load graph: ' + error.message;
+    if (loading) {
+      loading.classList.remove('hidden');
+      loading.innerHTML = '';
+      loading.classList.add('error');
+      loading.textContent = 'Could not load graph: ' + error.message;
+    }
   });

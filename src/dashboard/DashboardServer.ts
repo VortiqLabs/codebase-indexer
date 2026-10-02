@@ -37,6 +37,8 @@ interface DashboardIndexSummary {
   relationKinds: Record<string, number>;
 }
 
+const MAX_CACHE_ENTRIES = 100;
+
 export function defaultIndexDirectory(): string {
   return path.join(os.homedir(), '.cache', 'codebase-indexer');
 }
@@ -58,6 +60,17 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
   });
   app.get('/assets/graph-client.js', (_request, response) => response.sendFile(graphClientPath));
   app.use('/assets/monaco', express.static(monacoAssetsPath));
+
+  app.get('/api/system/memory', (_request, response) => {
+    const mem = process.memoryUsage();
+    response.json({
+      rssMb: Math.round(mem.rss / (1024 * 1024)),
+      heapUsedMb: Math.round(mem.heapUsed / (1024 * 1024)),
+      heapTotalMb: Math.round(mem.heapTotal / (1024 * 1024)),
+      externalMb: Math.round(mem.external / (1024 * 1024)),
+      cacheSize: cache.size
+    });
+  });
 
   app.post('/api/github/index', (request, response) => {
     try {
@@ -139,6 +152,42 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
     response.json({
       metadata: loaded.summary.metadata,
       graph: await runIndexWorker(loaded.filePath, { operation: 'graph', all: request.query.all === 'true' })
+    });
+  });
+
+  app.get('/api/indexes/:uid/export', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) {
+      response.status(400).json({ error: 'Invalid index UID' });
+      return;
+    }
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) {
+      response.status(404).json({ error: 'Index not found' });
+      return;
+    }
+    const snapshot = await IndexReader.read(loaded.filePath, uid);
+    const format = typeof request.query.format === 'string' ? request.query.format.toLowerCase() : 'json';
+
+    if (format === 'csv') {
+      const csvRows = ['Name,Kind,FilePath,StartLine,EndLine'];
+      for (const sym of snapshot.symbols) {
+        csvRows.push(`"${sym.name.replace(/"/g, '""')}","${sym.kind}","${sym.filePath.replace(/"/g, '""')}",${sym.startLine},${sym.endLine}`);
+      }
+      response.setHeader('Content-Type', 'text/csv');
+      response.setHeader('Content-Disposition', `attachment; filename="${uid}-symbols.csv"`);
+      response.send(csvRows.join('\n'));
+      return;
+    }
+
+    response.setHeader('Content-Type', 'application/json');
+    response.setHeader('Content-Disposition', `attachment; filename="${uid}-export.json"`);
+    response.json({
+      metadata: snapshot.metadata,
+      files: snapshot.files.map(f => ({ path: f.path, language: f.language, size: f.size })),
+      symbols: snapshot.symbols,
+      relations: snapshot.relations
     });
   });
 
@@ -310,6 +359,7 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
     const query = typeof request.query.q === 'string' ? request.query.q.trim() : '';
     const indexUid = typeof request.query.index === 'string' ? request.query.index : undefined;
     const indexGroup = typeof request.query.group === 'string' ? request.query.group : undefined;
+    const language = typeof request.query.language === 'string' && request.query.language ? request.query.language : undefined;
     const requestedLimit = typeof request.query.limit === 'string' ? Number(request.query.limit) : 50;
     const limit = Number.isSafeInteger(requestedLimit) ? Math.max(1, Math.min(100, requestedLimit)) : 50;
     const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_$.-]+/gu) ?? [])];
@@ -319,12 +369,15 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
     }
 
     const { indexes } = await loadIndexes(resolvedDirectory, cache);
-    const results: Array<{ uid: string; workspace: string; path: string; language: string; score: number; excerpt?: string }> = [];
+    let results: Array<{ uid: string; workspace: string; path: string; language: string; score: number; excerpt?: string }> = [];
     for (const loaded of indexes) {
       if (indexUid && loaded.summary.metadata.uid !== indexUid) continue;
       if (indexGroup && dashboardIndexGroup(loaded.summary.metadata) !== indexGroup) continue;
       const indexResults = await runIndexWorker<typeof results>(loaded.filePath, { operation: 'search', query, limit });
       results.push(...indexResults);
+    }
+    if (language) {
+      results = results.filter(r => r.language === language);
     }
     results.sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));
     response.json({ results: results.slice(0, limit) });
@@ -367,6 +420,10 @@ async function loadIndexes(
         summary = cached.summary;
       } else {
         summary = await runIndexWorker<DashboardIndexSummary>(filePath, { operation: 'summary' });
+        if (cache.size >= MAX_CACHE_ENTRIES) {
+          const oldestKey = cache.keys().next().value;
+          if (oldestKey !== undefined) cache.delete(oldestKey);
+        }
         cache.set(filePath, { modifiedAt: fileStats.mtimeMs, size: fileStats.size, summary });
       }
       indexes.push({ summary, fileName: entry.name, filePath });
