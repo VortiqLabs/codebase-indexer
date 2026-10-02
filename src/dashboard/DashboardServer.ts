@@ -1,5 +1,7 @@
 import express, { type Express } from 'express';
 import { Worker } from 'node:worker_threads';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { indexGitHubRepository } from '../github/GitHubRepositoryIndexer.js';
 import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
@@ -12,6 +14,7 @@ import { DASHBOARD_PAGE } from './DashboardPage.js';
 import { GitHubIndexJobs } from './GitHubIndexJobs.js';
 import { GRAPH_PAGE } from './GraphPage.js';
 
+const execFileAsync = promisify(execFile);
 const graphClientPath = fileURLToPath(new URL('../../dashboard/graph-client.js', import.meta.url));
 const monacoAssetsPath = fileURLToPath(new URL('../../dashboard/monaco', import.meta.url));
 const indexWorkerPath = fileURLToPath(new URL('./IndexSnapshotWorker.js', import.meta.url));
@@ -153,6 +156,129 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
       metadata: loaded.summary.metadata,
       graph: await runIndexWorker(loaded.filePath, { operation: 'graph', all: request.query.all === 'true' })
     });
+  });
+
+  app.get('/api/indexes/:uid/graph/cycles', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json({ cycles: await runIndexWorker(loaded.filePath, { operation: 'cycles' }) });
+  });
+
+  app.get('/api/indexes/:uid/graph/matrix', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'matrix' }));
+  });
+
+  app.get('/api/indexes/:uid/graph/radial', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const query = typeof request.query.q === 'string' ? request.query.q : undefined;
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'radial', ...(query ? { query } : {}) }));
+  });
+
+  app.get('/api/indexes/:uid/graph/flow', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'flow' }));
+  });
+
+  app.get('/api/indexes/:uid/graph/path', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const from = typeof request.query.from === 'string' ? request.query.from : '';
+    const to = typeof request.query.to === 'string' ? request.query.to : '';
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'path', from, to }));
+  });
+
+  app.get('/api/indexes/:uid/complexity', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'complexity' }));
+  });
+
+  app.get('/api/indexes/:uid/duplicates', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'duplicates' }));
+  });
+
+  app.get('/api/indexes/:uid/database', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json({ models: await runIndexWorker(loaded.filePath, { operation: 'database' }) });
+  });
+
+  app.get('/api/indexes/:uid/tests', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json({ tests: await runIndexWorker(loaded.filePath, { operation: 'tests' }) });
+  });
+
+  app.get('/api/indexes/:uid/configDoc', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'configDoc' }));
+  });
+
+  app.get('/api/indexes/:uid/git', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const gitData = await getGitInfo(loaded.summary.metadata.workspaceRoot);
+    response.json(gitData);
+  });
+
+  app.get('/api/indexes/:uid/health', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const health = await checkHealth(loaded.filePath, uid);
+    response.json(health);
+  });
+
+  app.post('/api/indexes/:uid/repair', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    cache.delete(loaded.filePath);
+    response.json({ ok: true, message: 'Index cache cleared and snapshot verified' });
   });
 
   app.get('/api/indexes/:uid/export', async (request, response) => {
@@ -390,6 +516,67 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
   return app;
 }
 
+async function getGitInfo(workspaceRoot: string) {
+  try {
+    const { stdout: status } = await execFileAsync('git', ['status', '--porcelain'], { cwd: workspaceRoot });
+    const { stdout: branch } = await execFileAsync('git', ['branch', '--show-current'], { cwd: workspaceRoot });
+    const { stdout: log } = await execFileAsync('git', ['log', '-n', '20', '--pretty=format:%h|%an|%ar|%s'], { cwd: workspaceRoot });
+
+    const commits = log.split('\n').filter(Boolean).map((line) => {
+      const parts = line.split('|');
+      return { hash: parts[0] || '', author: parts[1] || '', date: parts[2] || '', subject: parts[3] || '' };
+    });
+
+    const changedFiles = status.split('\n').filter(Boolean).map((line) => {
+      return { code: line.slice(0, 2).trim(), filePath: line.slice(3).trim() };
+    });
+
+    return {
+      isGit: true,
+      branch: branch.trim() || 'main',
+      commits,
+      changedFiles
+    };
+  } catch {
+    return { isGit: false, branch: 'N/A', commits: [], changedFiles: [] };
+  }
+}
+
+async function checkHealth(filePath: string, uid: string) {
+  try {
+    const snapshot = await IndexReader.read(filePath, uid);
+    const missingFiles: string[] = [];
+    for (const f of snapshot.files.slice(0, 50)) {
+      const fullPath = path.resolve(snapshot.metadata.workspaceRoot, f.path);
+      try {
+        await stat(fullPath);
+      } catch {
+        missingFiles.push(f.path);
+      }
+    }
+    const symbolIds = new Set(snapshot.symbols.map((s) => s.id));
+    let brokenRefs = 0;
+    for (const r of snapshot.relations) {
+      if (r.fromSymbolId && !symbolIds.has(r.fromSymbolId)) brokenRefs++;
+      if (r.toSymbolId && !symbolIds.has(r.toSymbolId)) brokenRefs++;
+    }
+
+    return {
+      status: brokenRefs === 0 && missingFiles.length === 0 ? 'HEALTHY' : 'WARNINGS',
+      missingFiles,
+      brokenReferencesCount: brokenRefs,
+      totalFiles: snapshot.files.length,
+      totalSymbols: snapshot.symbols.length,
+      totalRelations: snapshot.relations.length
+    };
+  } catch (err) {
+    return {
+      status: 'CORRUPTED',
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+}
+
 async function loadIndexes(
   indexDirectory: string,
   cache: Map<string, CachedIndex>
@@ -442,11 +629,13 @@ function isPathInside(root: string, candidate: string): boolean {
 }
 
 interface IndexWorkerRequest {
-  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence';
+  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence' | 'cycles' | 'matrix' | 'radial' | 'flow' | 'complexity' | 'duplicates' | 'database' | 'tests' | 'configDoc' | 'path';
   all?: boolean;
   query?: string;
   limit?: number;
   relativeFilePath?: string;
+  from?: string;
+  to?: string;
 }
 
 function runIndexWorker<T>(filePath: string, request: IndexWorkerRequest): Promise<T> {

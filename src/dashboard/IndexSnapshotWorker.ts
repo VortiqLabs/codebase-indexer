@@ -1,16 +1,19 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { IndexReader } from '../storage/BinaryIndex.js';
 import type { IndexSnapshot } from '../storage/IndexFormat.js';
-import { detectApiEndpoints } from '../intelligence/ApiDetector.js';
-import { buildRepositoryMap } from '../intelligence/RepositoryMap.js';
+import { detectApiEndpoints, detectDatabaseSchema, detectTestIntelligence, detectConfigAndDocIntelligence } from '../intelligence/ApiDetector.js';
+import { buildRepositoryMap, analyzeComplexity, detectDuplicates } from '../intelligence/RepositoryMap.js';
+import { findGraphCycles, getMatrixGraph, getRadialGraph, getFlowGraph, findSymbolPath } from '../intelligence/GraphQuery.js';
 
 interface WorkerRequest {
   filePath: string;
-  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence';
+  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence' | 'cycles' | 'matrix' | 'radial' | 'flow' | 'complexity' | 'duplicates' | 'database' | 'tests' | 'configDoc' | 'path';
   all?: boolean;
   query?: string;
   limit?: number;
   relativeFilePath?: string;
+  from?: string;
+  to?: string;
 }
 
 async function main(): Promise<void> {
@@ -24,6 +27,36 @@ async function main(): Promise<void> {
         break;
       case 'graph':
         value = buildRelationGraph(snapshot, request.all ? Infinity : 80);
+        break;
+      case 'cycles':
+        value = findGraphCycles(snapshot);
+        break;
+      case 'matrix':
+        value = getMatrixGraph(snapshot);
+        break;
+      case 'radial':
+        value = getRadialGraph(snapshot, request.query);
+        break;
+      case 'flow':
+        value = getFlowGraph(snapshot);
+        break;
+      case 'path':
+        value = findSymbolPath(snapshot, request.from ?? '', request.to ?? '');
+        break;
+      case 'complexity':
+        value = analyzeComplexity(snapshot);
+        break;
+      case 'duplicates':
+        value = detectDuplicates(snapshot);
+        break;
+      case 'database':
+        value = detectDatabaseSchema(snapshot);
+        break;
+      case 'tests':
+        value = detectTestIntelligence(snapshot);
+        break;
+      case 'configDoc':
+        value = detectConfigAndDocIntelligence(snapshot);
         break;
       case 'search':
         value = searchSnapshot(snapshot, request.query ?? '', request.limit ?? 50);
