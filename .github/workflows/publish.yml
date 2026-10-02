@@ -11,9 +11,11 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
       packages: write
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -30,6 +32,20 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Build package
+        run: npm run build
+
+      - name: Make CLI executables executable
+        run: |
+          chmod +x dist/bin/codebase-indexer.js
+          chmod +x dist/bin/codebase-indexer-mcp.js
+
+      - name: Verify CLI executables
+        run: |
+          ls -l dist/bin/
+          test -x dist/bin/codebase-indexer.js
+          test -x dist/bin/codebase-indexer-mcp.js
 
       - name: Publish package
         run: npm publish
