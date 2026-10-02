@@ -155,7 +155,9 @@ async function main(): Promise<void> {
     case 'symbols':
     case 'references':
     case 'callers':
-    case 'callees': {
+    case 'callees':
+    case 'deps':
+    case 'dependents': {
       const name = parsed.positionals.join(' ');
       if (!name) throw new Error(`${command} requires a name`);
       const results = command === 'symbols'
@@ -164,12 +166,54 @@ async function main(): Promise<void> {
           ? await manager.findReferences(name)
           : command === 'callers'
             ? await manager.findCallers(name)
-            : await manager.findCallees(name);
+            : command === 'callees'
+              ? await manager.findCallees(name)
+              : command === 'deps'
+                ? await manager.findDependencies(name, Number(firstValue(parsed, '--depth') ?? 1))
+                : await manager.findDependents(name, Number(firstValue(parsed, '--depth') ?? 1));
       if (json) console.log(JSON.stringify(results, null, 2));
       else for (const result of results) {
         if ('targetName' in result) console.log(`${result.kind} ${result.filePath}:${result.line}  ${result.targetName}`);
         else console.log(`${result.kind} ${result.name}  ${result.filePath}:${result.startLine}`);
       }
+      return;
+    }
+    case 'path': {
+      const [from, to] = parsed.positionals;
+      if (!from || !to) throw new Error('path requires a source and target symbol name');
+      const result = await manager.findPath(from, to, { maxDepth: Number(firstValue(parsed, '--depth') ?? 4), maxNodes: Number(firstValue(parsed, '--max-nodes') ?? 32) });
+      if (json) console.log(JSON.stringify(result, null, 2));
+      else console.log(result.nodes.join(' -> '));
+      return;
+    }
+    case 'map': {
+      const map = await manager.getRepositoryMap();
+      if (json) console.log(JSON.stringify(map, null, 2));
+      else {
+        console.log(`Repository: ${map.root}`);
+        for (const area of map.areas) console.log(`${area.kind} ${area.path} (${area.files} files, ${area.symbols} symbols)`);
+      }
+      return;
+    }
+    case 'api':
+    case 'apis': {
+      const endpoints = await manager.findApiEndpoints();
+      if (json) console.log(JSON.stringify(endpoints, null, 2));
+      else for (const endpoint of endpoints) console.log(`${endpoint.method} ${endpoint.path} ${endpoint.fileId}`);
+      return;
+    }
+    case 'intent': {
+      const query = parsed.positionals.join(' ');
+      if (!query) throw new Error('intent requires a query');
+      const result = await manager.classifyQuery(query);
+      if (json) console.log(JSON.stringify(result, null, 2));
+      else console.log(`${result.kind} (${result.confidence.toFixed(2)})`);
+      return;
+    }
+    case 'sensitive': {
+      const regions = await manager.findSensitiveRegions();
+      if (json) console.log(JSON.stringify(regions, null, 2));
+      else for (const region of regions) console.log(`${region.filePath}:${region.line} ${region.kind} confidence=${region.confidence}`);
       return;
     }
     case 'remove': {
@@ -196,7 +240,7 @@ function parseArguments(args: string[]): Arguments {
   const positionals: string[] = [];
   const flags = new Set<string>();
   const values = new Map<string, string[]>();
-  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index', '--host', '--port', '--ref']);
+  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index', '--host', '--port', '--ref', '--depth', '--max-nodes']);
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     if (!arg.startsWith('--')) {

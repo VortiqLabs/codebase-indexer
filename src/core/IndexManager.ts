@@ -15,6 +15,11 @@ import type { VectorRecord } from '../types/VectorRecord.js';
 import type { EmbeddingProvider } from '../embeddings/EmbeddingProvider.js';
 import { EmbeddingCache } from '../embeddings/EmbeddingCache.js';
 import { EmbeddingQueue } from '../embeddings/EmbeddingQueue.js';
+import { detectApiEndpoints, type ApiEndpoint } from '../intelligence/ApiDetector.js';
+import { findDependencyRelations, findSymbolPath, type GraphQueryOptions, type GraphPathResult } from '../intelligence/GraphQuery.js';
+import { buildRepositoryMap, type RepositoryMap } from '../intelligence/RepositoryMap.js';
+import { classifyQuery, type QueryIntent } from '../intelligence/QueryIntent.js';
+import { detectSensitiveRegions, type SensitiveRegion } from '../intelligence/SensitiveDetector.js';
 
 export interface IndexManagerOptions extends FileScannerOptions {
   workspacePath: string;
@@ -265,6 +270,36 @@ export class IndexManager {
     return snapshot.relations.filter((relation) => relation.kind === 'calls' && relation.fromSymbolId && symbolIds.has(relation.fromSymbolId));
   }
 
+  async findDependencies(query: string, depth = 1): Promise<RelationRecord[]> {
+    const snapshot = await this.read();
+    return findDependencyRelations(snapshot, query, false, depth);
+  }
+
+  async findDependents(query: string, depth = 1): Promise<RelationRecord[]> {
+    const snapshot = await this.read();
+    return findDependencyRelations(snapshot, query, true, depth);
+  }
+
+  async findPath(from: string, to: string, options: GraphQueryOptions = {}): Promise<GraphPathResult> {
+    return findSymbolPath(await this.read(), from, to, options);
+  }
+
+  async getRepositoryMap(): Promise<RepositoryMap> {
+    return buildRepositoryMap(await this.read());
+  }
+
+  async classifyQuery(query: string): Promise<QueryIntent> {
+    return classifyQuery(query);
+  }
+
+  async findApiEndpoints(): Promise<ApiEndpoint[]> {
+    return detectApiEndpoints(await this.read());
+  }
+
+  async findSensitiveRegions(): Promise<SensitiveRegion[]> {
+    return detectSensitiveRegions(await this.read());
+  }
+
   async semanticSearch(query: string, limit = 10): Promise<Array<{ file: FileRecord; chunk: CodeChunk; score: number }>> {
     const provider = this.options.embeddingProvider;
     if (!provider) throw new Error('Semantic search requires an explicitly configured embedding provider');
@@ -318,14 +353,47 @@ function isMissingFile(error: unknown): boolean {
 
 function resolveRelations(relations: RelationRecord[], symbols: SymbolRecord[]): void {
   const byName = new Map<string, SymbolRecord[]>();
-  for (const symbol of symbols) byName.set(symbol.name, [...(byName.get(symbol.name) ?? []), symbol]);
+  for (const symbol of symbols) {
+    const names = new Set<string>([symbol.name, normalizeRelationTarget(symbol.name), normalizeRelationTarget(symbol.filePath), symbol.filePath.split('/').at(-1)?.replace(/\.[^/.]+$/u, '') ?? '']);
+    for (const name of names) {
+      if (!name) continue;
+      byName.set(name, [...(byName.get(name) ?? []), symbol]);
+    }
+  }
   for (let index = 0; index < relations.length; index++) {
     const relation = relations[index]!;
-    const candidates = byName.get(relation.targetName) ?? [];
-    const local = candidates.find((candidate) => candidate.filePath === relation.filePath);
-    const target = local ?? (candidates.length === 1 ? candidates[0] : undefined);
+    const candidates = new Set<SymbolRecord>();
+    for (const candidateName of relationTargetCandidates(relation.targetName)) {
+      for (const candidate of byName.get(candidateName) ?? []) candidates.add(candidate);
+    }
+    const local = [...candidates].find((candidate) => candidate.filePath === relation.filePath);
+    const target = local ?? [...candidates][0];
     if (target) relations[index] = { ...relation, toSymbolId: target.id, confidence: local ? 0.9 : 0.72 };
   }
+}
+
+function relationTargetCandidates(targetName: string): string[] {
+  const normalized = normalizeRelationTarget(targetName);
+  const values = new Set<string>([targetName, normalized]);
+  const split = targetName.split(/[\/]/u).filter(Boolean);
+  for (const part of split) {
+    const cleaned = normalizeRelationTarget(part);
+    if (cleaned) values.add(cleaned);
+  }
+  if (normalized) values.add(normalized.replace(/\.[^/.]+$/u, ''));
+  return [...values].filter(Boolean);
+}
+
+function normalizeRelationTarget(value: string): string {
+  return value
+    .replace(/^['"]|['"]$/gu, '')
+    .replace(/^\.?\.?\//u, '')
+    .replace(/^[A-Za-z]+:/u, '')
+    .replace(/[?#].*$/u, '')
+    .replace(/\/index$/u, '')
+    .replace(/\.[a-z0-9]+$/iu, '')
+    .split(/[\\/]+/u).filter(Boolean).at(-1) ?? value
+    .replace(/^['"]|['"]$/gu, '');
 }
 
 function cosineSimilarity(left: number[], right: number[]): number {

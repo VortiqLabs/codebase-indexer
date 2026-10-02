@@ -80,4 +80,6 @@ Binary encoding is not encryption. Indexes remain local; no source or index data
 
 Implemented: recursive scanning, root and nested `.gitignore` rules and default exclusions, binary and maximum-size filtering, language detection, AST indexing with bundled Tree-sitter grammars, semantic chunks, stable workspace IDs, atomic binary persistence, incremental file add/change/delete detection, lexical and optional vector search, context building, file listing, metadata inspection, and debounced watch mode. Files without a bundled Tree-sitter grammar still receive lexical indexing and fallback chunks.
 
+Additional bundled grammars cover Elm, QL, YAML, Markdown, SQL, Dockerfile, Makefile, and `.gitignore`. See [src/parser/grammars/README.md](src/parser/grammars/README.md) for grammar asset provenance.
+
 Relationship extraction and resolution are partial: recorded calls, imports, references, and inheritance-like relations are heuristic, and symbol resolution is incomplete. Embeddings require an explicitly configured provider through the API; the CLI does not yet configure providers. Lazy loading for large vector collections and performance benchmarks are outstanding. Binary encoding is not encryption.

@@ -1,10 +1,12 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { IndexReader } from '../storage/BinaryIndex.js';
 import type { IndexSnapshot } from '../storage/IndexFormat.js';
+import { detectApiEndpoints } from '../intelligence/ApiDetector.js';
+import { buildRepositoryMap } from '../intelligence/RepositoryMap.js';
 
 interface WorkerRequest {
   filePath: string;
-  operation: 'summary' | 'graph' | 'search' | 'file';
+  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence';
   all?: boolean;
   query?: string;
   limit?: number;
@@ -28,6 +30,12 @@ async function main(): Promise<void> {
         break;
       case 'file':
         value = snapshot.files.find((file) => file.path === request.relativeFilePath);
+        break;
+      case 'intelligence':
+        value = {
+          repositoryMap: buildRepositoryMap(snapshot),
+          apiEndpoints: await detectApiEndpoints(snapshot)
+        };
         break;
     }
     parentPort?.postMessage({ ok: true, value });

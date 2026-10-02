@@ -23,21 +23,21 @@ test('Tree-sitter loads every bundled grammar', async () => {
   const parser = new TreeSitterParser();
   const grammars: Array<[string, string]> = [
     ['bash', 'script.sh'], ['c', 'code.c'], ['cpp', 'code.cpp'], ['csharp', 'code.cs'],
-    ['css', 'style.css'], ['dart', 'code.dart'], ['elisp', 'code.el'], ['elixir', 'code.ex'],
-    ['elm', 'code.elm'], ['go', 'code.go'], ['html', 'code.html'], ['java', 'code.java'],
+    ['css', 'style.css'], ['dart', 'code.dart'], ['dockerfile', 'Dockerfile'],
+    ['elisp', 'code.el'], ['elixir', 'code.ex'], ['elm', 'code.elm'], ['gitignore', '.gitignore'],
+    ['go', 'code.go'], ['html', 'code.html'], ['java', 'code.java'],
     ['javascript', 'code.js'], ['json', 'code.json'], ['kotlin', 'code.kt'], ['lua', 'code.lua'],
+    ['makefile', 'Makefile'], ['markdown', 'code.md'],
     ['objectivec', 'code.m'], ['ocaml', 'code.ml'], ['php', 'code.php'], ['python', 'code.py'],
     ['ql', 'code.ql'], ['rescript', 'code.res'], ['ruby', 'code.rb'], ['rust', 'code.rs'],
-    ['scala', 'code.scala'], ['solidity', 'code.sol'], ['swift', 'code.swift'],
+    ['scala', 'code.scala'], ['solidity', 'code.sol'], ['sql', 'code.sql'], ['swift', 'code.swift'],
     ['systemrdl', 'code.rdl'], ['tlaplus', 'code.tla'], ['toml', 'code.toml'],
     ['typescript', 'code.ts'], ['vue', 'code.vue'], ['yaml', 'code.yaml'], ['zig', 'code.zig']
   ];
-  const genericFallbackLanguages = new Set(['elm', 'ql', 'yaml']);
   for (const [language, filePath] of grammars) {
     try {
       const parsed = await parser.parse(filePath, 'value', language);
-      if (genericFallbackLanguages.has(language)) assert.equal(parsed, undefined, `${language} should use generic fallback`);
-      else assert.ok(parsed, `failed to load ${language}`);
+      assert.ok(parsed, `failed to load ${language}`);
     } catch (error) {
       throw new Error(`${language}: ${error instanceof Error ? error.message : String(error)}`);
     }

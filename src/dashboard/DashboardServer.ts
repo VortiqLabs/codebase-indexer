@@ -5,7 +5,9 @@ import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { IndexMetadata } from '../storage/IndexFormat.js';
+import { INDEX_CHECKSUM_SIZE, INDEX_HEADER_SIZE, INDEX_MAGIC, type IndexMetadata, type IndexSnapshot } from '../storage/IndexFormat.js';
+import { IndexReader } from '../storage/BinaryIndex.js';
+import { detectSensitiveRegions } from '../intelligence/SensitiveDetector.js';
 import { DASHBOARD_PAGE } from './DashboardPage.js';
 import { GitHubIndexJobs } from './GitHubIndexJobs.js';
 import { GRAPH_PAGE } from './GraphPage.js';
@@ -140,6 +142,131 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
     });
   });
 
+  app.get('/api/indexes/:uid/intelligence', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) {
+      response.status(400).json({ error: 'Invalid index UID' });
+      return;
+    }
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) {
+      response.status(404).json({ error: 'Index not found' });
+      return;
+    }
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'intelligence' }));
+  });
+
+  app.get('/api/indexes/:uid/files', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) {
+      response.status(400).json({ error: 'Invalid index UID' });
+      return;
+    }
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) {
+      response.status(404).json({ error: 'Index not found' });
+      return;
+    }
+    const snapshot = await IndexReader.read(loaded.filePath, uid);
+    const query = typeof request.query.q === 'string' ? request.query.q.trim().toLowerCase() : '';
+    const language = typeof request.query.language === 'string' ? request.query.language : undefined;
+    const files = snapshot.files.filter((file) => {
+      if (language && file.language !== language) return false;
+      if (!query) return true;
+      return file.path.toLowerCase().includes(query) || file.language.toLowerCase().includes(query) || file.terms.some((term) => term.toLowerCase().includes(query));
+    });
+    response.json({ files });
+  });
+
+  app.get('/api/indexes/:uid/symbols', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) {
+      response.status(400).json({ error: 'Invalid index UID' });
+      return;
+    }
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) {
+      response.status(404).json({ error: 'Index not found' });
+      return;
+    }
+    const snapshot = await IndexReader.read(loaded.filePath, uid);
+    const query = typeof request.query.q === 'string' ? request.query.q.trim().toLowerCase() : '';
+    const filtered = query
+      ? snapshot.symbols.filter((symbol) => symbol.name.toLowerCase().includes(query) || symbol.filePath.toLowerCase().includes(query))
+      : snapshot.symbols;
+    response.json({ symbols: filtered });
+  });
+
+  app.get('/api/indexes/:uid/security', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) {
+      response.status(400).json({ error: 'Invalid index UID' });
+      return;
+    }
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) {
+      response.status(404).json({ error: 'Index not found' });
+      return;
+    }
+    const snapshot = await IndexReader.read(loaded.filePath, uid);
+    response.json({ findings: await detectSensitiveRegions(snapshot) });
+  });
+
+  app.get('/api/indexes/:uid/inspect', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) {
+      response.status(400).json({ error: 'Invalid index UID' });
+      return;
+    }
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) {
+      response.status(404).json({ error: 'Index not found' });
+      return;
+    }
+    const buffer = await readFile(loaded.filePath);
+    const magic = buffer.subarray(0, INDEX_MAGIC.length).toString('ascii');
+    const version = buffer.readUInt16BE(8);
+    const flags = buffer.readUInt16BE(10);
+    const uidLength = buffer.readUInt16BE(12);
+    const payloadLength = Number(buffer.readBigUInt64BE(14));
+    const headerSize = INDEX_HEADER_SIZE;
+    const checksumSize = INDEX_CHECKSUM_SIZE;
+    const bodyLength = headerSize + uidLength + payloadLength;
+    const snapshot = await IndexReader.read(loaded.filePath, uid);
+    response.json({
+      filePath: loaded.filePath,
+      magic,
+      version,
+      flags,
+      uid,
+      headerSize,
+      uidLength,
+      payloadLength,
+      bodyLength,
+      checksumSize,
+      fileSize: buffer.length,
+      sections: [
+        { name: 'header', size: headerSize },
+        { name: 'uid', size: uidLength },
+        { name: 'payload', size: payloadLength },
+        { name: 'checksum', size: checksumSize }
+      ],
+      snapshot: {
+        metadata: snapshot.metadata,
+        fileCount: snapshot.files.length,
+        symbolCount: snapshot.symbols.length,
+        relationCount: snapshot.relations.length,
+        chunkCount: snapshot.chunks.length,
+        vectorCount: snapshot.vectors.length
+      }
+    });
+  });
+
   app.get('/api/indexes/:uid/source', async (request, response) => {
     const uid = request.params.uid;
     const relativeFilePath = typeof request.query.path === 'string' ? request.query.path : '';
@@ -258,7 +385,7 @@ function isPathInside(root: string, candidate: string): boolean {
 }
 
 interface IndexWorkerRequest {
-  operation: 'summary' | 'graph' | 'search' | 'file';
+  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence';
   all?: boolean;
   query?: string;
   limit?: number;

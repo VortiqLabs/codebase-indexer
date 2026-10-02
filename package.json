@@ -25,7 +25,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && esbuild src/dashboard/graph-client.js --bundle --minify --format=iife --platform=browser --outfile=dist/dashboard/graph-client.js && mkdir -p dist/dashboard/monaco && cp -R node_modules/monaco-editor/min/vs dist/dashboard/monaco/",
+    "build": "tsc -p tsconfig.json && mkdir -p dist/src/parser/grammars && cp -R src/parser/grammars/. dist/src/parser/grammars/ && esbuild src/dashboard/graph-client.js --bundle --minify --format=iife --platform=browser --outfile=dist/dashboard/graph-client.js && mkdir -p dist/dashboard/monaco && cp -R node_modules/monaco-editor/min/vs dist/dashboard/monaco/",
     "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "dependencies": {

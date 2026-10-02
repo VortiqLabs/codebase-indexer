@@ -19,7 +19,7 @@ test('dashboard serves index summaries, resolved graph data, and cross-index sea
     `export function helper${index}() { return ${index}; }`);
   await writeFile(
     path.join(workspace, 'src', 'auth.ts'),
-    ['export function authenticate() { return findUser(); }', 'function findUser() { return "alice"; }', ...generatedSymbols].join('\n')
+    ['export function authenticate() { return findUser(); }', 'function findUser() { return "alice"; }', 'app.get("/health", () => "ok");', ...generatedSymbols].join('\n')
   );
   const indexer = new CodebaseIndexer({ workspacePath: workspace, indexDir });
   await indexer.initialize();
@@ -56,6 +56,14 @@ test('dashboard serves index summaries, resolved graph data, and cross-index sea
     assert.ok(graphPayload.graph.edges.some((edge) => edge.kind === 'calls'));
     const authenticate = graphPayload.graph.nodes.find((node) => node.name === 'authenticate');
     assert.deepEqual({ startLine: authenticate?.startLine, endLine: authenticate?.endLine }, { startLine: 1, endLine: 1 });
+
+    const intelligenceResponse = await fetch(`${baseUrl}/api/indexes/${uid}/intelligence`);
+    const intelligencePayload = await intelligenceResponse.json() as {
+      repositoryMap: { areas: Array<{ path: string; kind: string; files: number }> };
+      apiEndpoints: Array<{ method: string; path: string; fileId: string }>;
+    };
+    assert.ok(intelligencePayload.repositoryMap.areas.some((area) => area.path === 'src/auth.ts' && area.kind === 'source' && area.files === 1));
+    assert.ok(intelligencePayload.apiEndpoints.some((endpoint) => endpoint.method === 'GET' && endpoint.path === '/health' && endpoint.fileId === 'src/auth.ts'));
 
     const sourceResponse = await fetch(`${baseUrl}/api/indexes/${uid}/source?path=src%2Fauth.ts`);
     const sourcePayload = await sourceResponse.json() as { path: string; language: string; content: string };

@@ -3,6 +3,11 @@ import type { FileRecord } from '../types/FileRecord.js';
 import type { RelationRecord } from '../types/Relation.js';
 import type { SymbolRecord } from '../types/Symbol.js';
 import { ContextBuilder, type CodeContext, type ContextOptions } from '../context/ContextBuilder.js';
+import type { ApiEndpoint } from '../intelligence/ApiDetector.js';
+import { classifyQuery, type QueryIntent } from '../intelligence/QueryIntent.js';
+import { findDependencyRelations, findSymbolPath, type GraphPathResult } from '../intelligence/GraphQuery.js';
+import { buildRepositoryMap, type RepositoryMap } from '../intelligence/RepositoryMap.js';
+import { detectSensitiveRegions, type SensitiveRegion } from '../intelligence/SensitiveDetector.js';
 
 export class CodebaseIndexer {
   private manager?: IndexManager;
@@ -53,6 +58,34 @@ export class CodebaseIndexer {
 
   async findCallees(name: string): Promise<RelationRecord[]> {
     return this.getManager().findCallees(name);
+  }
+
+  async findDependencies(name: string, depth = 1): Promise<RelationRecord[]> {
+    return this.getManager().findDependencies(name, depth);
+  }
+
+  async findDependents(name: string, depth = 1): Promise<RelationRecord[]> {
+    return this.getManager().findDependents(name, depth);
+  }
+
+  async findPath(from: string, to: string, options?: { maxDepth?: number; maxNodes?: number }): Promise<GraphPathResult> {
+    return this.getManager().findPath(from, to, options);
+  }
+
+  async getRepositoryMap(): Promise<RepositoryMap> {
+    return this.getManager().getRepositoryMap();
+  }
+
+  async classifyQuery(query: string): Promise<QueryIntent> {
+    return this.getManager().classifyQuery(query);
+  }
+
+  async findApiEndpoints(): Promise<ApiEndpoint[]> {
+    return this.getManager().findApiEndpoints();
+  }
+
+  async findSensitiveRegions(): Promise<SensitiveRegion[]> {
+    return this.getManager().findSensitiveRegions();
   }
 
   async getContext(query: string, options: ContextOptions = {}): Promise<CodeContext> {

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Language, Parser, type Node as SyntaxNode, type Tree } from 'web-tree-sitter';
 import type { CodeChunk } from '../types/CodeChunk.js';
 import type { RelationRecord } from '../types/Relation.js';
@@ -15,6 +16,7 @@ export interface ParsedFile {
 const require = createRequire(import.meta.url);
 const languages = new Map<string, Promise<Language>>();
 let initialized: Promise<void> | undefined;
+const localGrammars = new Set(['dockerfile', 'elm', 'gitignore', 'make', 'markdown', 'ql', 'sql', 'yaml']);
 
 const grammars: Record<string, string> = {
   bash: 'bash',
@@ -24,7 +26,10 @@ const grammars: Record<string, string> = {
   css: 'css',
   dart: 'dart',
   elisp: 'elisp',
+  elm: 'elm',
   elixir: 'elixir',
+  dockerfile: 'dockerfile',
+  gitignore: 'gitignore',
   go: 'go',
   html: 'html',
   java: 'java',
@@ -32,21 +37,26 @@ const grammars: Record<string, string> = {
   json: 'json',
   kotlin: 'kotlin',
   lua: 'lua',
+  makefile: 'make',
+  markdown: 'markdown',
   objectivec: 'objc',
   ocaml: 'ocaml',
   php: 'php',
   python: 'python',
+  ql: 'ql',
   rescript: 'rescript',
   ruby: 'ruby',
   rust: 'rust',
   scala: 'scala',
   solidity: 'solidity',
+  sql: 'sql',
   swift: 'swift',
   systemrdl: 'systemrdl',
   tlaplus: 'tlaplus',
   toml: 'toml',
   typescript: 'typescript',
   vue: 'vue',
+  yaml: 'yaml',
   zig: 'zig'
 };
 
@@ -116,7 +126,9 @@ export class TreeSitterParser {
 async function getLanguage(grammar: string): Promise<Language> {
   let language = languages.get(grammar);
   if (!language) {
-    const wasmPath = require.resolve(`tree-sitter-wasms/out/tree-sitter-${grammar}.wasm`);
+    const wasmPath = localGrammars.has(grammar)
+      ? path.join(path.dirname(fileURLToPath(import.meta.url)), 'grammars', `${grammar}.wasm`)
+      : require.resolve(`tree-sitter-wasms/out/tree-sitter-${grammar}.wasm`);
     language = Language.load(path.resolve(wasmPath));
     languages.set(grammar, language);
   }
@@ -208,8 +220,7 @@ function extract(root: SyntaxNode, filePath: string): ParsedFile {
         });
       }
     } else if (['import_statement', 'import_declaration', 'use_declaration', 'include_statement'].includes(node.type)) {
-      const targetName = node.namedChildren.find((child) => child !== null && (child.type === 'string' || child.type === 'string_literal'))?.text
-        .replace(/^['"]|['"]$/gu, '');
+      const targetName = resolveImportTargetName(node);
       if (targetName) {
         relations.push({
           id: stableId(`${filePath}:imports:${node.startIndex}:${targetName}`),
@@ -273,6 +284,17 @@ function isDeclarationName(node: SyntaxNode): boolean {
 
 function isExported(node: SyntaxNode): boolean {
   return /^\s*export\b/u.test(node.text) || ['export_statement', 'export_declaration'].includes(node.parent?.type ?? '');
+}
+
+function resolveImportTargetName(node: SyntaxNode): string | undefined {
+  const sourceString = node.namedChildren.find((child) => child !== null && (child.type === 'string' || child.type === 'string_literal' || child.type === 'bare_string_literal' || child.type === 'string_fragment'))?.text
+    .replace(/^['"]|['"]$/gu, '');
+  if (sourceString) return sourceString;
+
+  const sourceField = node.childForFieldName('source');
+  if (sourceField) return sourceField.text.replace(/^['"]|['"]$/gu, '');
+
+  return undefined;
 }
 
 function stableId(value: string): string {

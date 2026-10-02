@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "codebase-indexer": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/dist/bin/codebase-indexer.js", "mcp"]
+    }
+  }
+}

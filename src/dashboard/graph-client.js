@@ -36,7 +36,7 @@ const symbolColors = {
 };
 const nodes = [];
 let links = [];
-const visibleKinds = new Set(['calls', 'imports', 'extends', 'implements']);
+const visibleKinds = new Set(['calls', 'imports', 'exports', 'references', 'contains', 'extends', 'implements']);
 const neighbors = new Map();
 const symbolPaths = {
   class: 'M12 2 21 7v10l-9 5-9-5V7z',
