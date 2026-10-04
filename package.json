@@ -1,6 +1,6 @@
 {
   "name": "@vortiqlabs/codebase-indexer",
-  "version": "0.2.0",
+  "version": "0.1.6",
   "description": "A standalone local-first codebase indexing engine",
   "type": "module",
   "engines": {
