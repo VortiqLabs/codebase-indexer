@@ -6,6 +6,7 @@ import { FileScanner, type FileScannerOptions } from '../scanner/FileScanner.js'
 import { TreeSitterParser } from '../parser/TreeSitterParser.js';
 import { SemanticChunker } from '../chunks/SemanticChunker.js';
 import { IndexReader, IndexWriter } from '../storage/BinaryIndex.js';
+import { StagingDatabase } from '../storage/StagingDatabase.js';
 import { INDEX_FORMAT_VERSION, type IndexMetadata, type IndexSnapshot } from '../storage/IndexFormat.js';
 import type { CodeChunk } from '../types/CodeChunk.js';
 import type { FileRecord } from '../types/FileRecord.js';
@@ -13,7 +14,6 @@ import type { RelationRecord } from '../types/Relation.js';
 import type { SymbolRecord } from '../types/Symbol.js';
 import type { VectorRecord } from '../types/VectorRecord.js';
 import type { EmbeddingProvider } from '../embeddings/EmbeddingProvider.js';
-import { EmbeddingCache } from '../embeddings/EmbeddingCache.js';
 import { EmbeddingQueue } from '../embeddings/EmbeddingQueue.js';
 import { detectApiEndpoints, type ApiEndpoint } from '../intelligence/ApiDetector.js';
 import { findDependencyRelations, findSymbolPath, type GraphQueryOptions, type GraphPathResult } from '../intelligence/GraphQuery.js';
@@ -30,6 +30,11 @@ export interface IndexManagerOptions extends FileScannerOptions {
   indexPart?: number;
   indexPartCount?: number;
   embeddingProvider?: EmbeddingProvider;
+  workers?: number;
+  memoryLimitMb?: number;
+  verboseMemory?: boolean;
+  noEmbeddings?: boolean;
+  profile?: 'default' | 'large';
 }
 
 export interface IndexUpdateResult {
@@ -75,16 +80,16 @@ export class IndexManager {
   }
 
   async index(force = false, onProgress?: (progress: IndexProgress) => void): Promise<IndexUpdateResult> {
-    const scanner = await FileScanner.create(this.workspacePath, this.options);
-    onProgress?.({ stage: 'scan', message: `Scanning ${this.workspacePath}` });
-    const scan = await scanner.scan((visitedFiles, acceptedFiles) => {
-      onProgress?.({
-        stage: 'scan',
-        current: visitedFiles,
-        message: `Scanned ${visitedFiles.toLocaleString()} files; ${acceptedFiles.toLocaleString()} are within index limits`
-      });
-    });
-    onProgress?.({ stage: 'scan', current: scan.files.length, total: scan.files.length, message: `Scan complete: ${scan.files.length.toLocaleString()} files accepted` });
+    const isLarge = this.options.profile === 'large';
+    const numWorkers = Math.max(1, this.options.workers ?? 2);
+    const memoryLimit = (this.options.memoryLimitMb ?? 4096) * 1024 * 1024;
+    const verboseMem = this.options.verboseMemory ?? isLarge;
+    const skipEmbeddings = this.options.noEmbeddings ?? (isLarge && !this.options.embeddingProvider);
+
+    const stagingDbPath = `${this.indexPath}.staging.db`;
+    await rm(stagingDbPath, { force: true });
+    const db = new StagingDatabase(stagingDbPath);
+
     let previous: IndexSnapshot | undefined;
     if (!force) {
       try {
@@ -94,87 +99,185 @@ export class IndexManager {
       }
     }
 
-    const oldFiles = new Map(previous?.files.map((file) => [file.path, file]) ?? []);
-    const changedPaths = new Set<string>();
+    const previousFilesMap = new Map(previous?.files.map((f) => [f.path, f]) ?? []);
+
+    const scanner = await FileScanner.create(this.workspacePath, this.options);
+    onProgress?.({ stage: 'scan', message: `Scanning ${this.workspacePath}` });
+
     let added = 0;
     let changed = 0;
     let unchanged = 0;
-    const files = scan.files.map((file) => {
-      const oldFile = oldFiles.get(file.path);
-      oldFiles.delete(file.path);
-      if (oldFile?.hash === file.hash) {
-        unchanged++;
-        return oldFile;
-      }
-      if (oldFile) changed++;
-      else added++;
-      changedPaths.add(file.path);
-      return file;
-    });
-    const deleted = oldFiles.size;
-    const now = new Date().toISOString();
-    const currentPaths = new Set(files.map((file) => file.path));
-    const symbols = (previous?.symbols ?? []).filter((symbol) => currentPaths.has(symbol.filePath) && !changedPaths.has(symbol.filePath));
-    const relations = (previous?.relations ?? []).filter((relation) => currentPaths.has(relation.filePath) && !changedPaths.has(relation.filePath));
-    const chunks = (previous?.chunks ?? []).filter((chunk) => currentPaths.has(chunk.filePath) && !changedPaths.has(chunk.filePath));
     let parseErrors = 0;
-    const changedFilePaths = [...changedPaths];
-    const filesByPath = new Map(files.map((file) => [file.path, file]));
-    onProgress?.({ stage: 'parse', current: 0, total: changedFilePaths.length, message: `Parsing ${changedFilePaths.length.toLocaleString()} added or changed files` });
-    for (let index = 0; index < changedFilePaths.length; index++) {
-      const filePath = changedFilePaths[index]!;
-      if (index === 0 || (index + 1) % 100 === 0 || index + 1 === changedFilePaths.length) {
-        onProgress?.({ stage: 'parse', current: index + 1, total: changedFilePaths.length, message: `Parsing files: ${(index + 1).toLocaleString()} of ${changedFilePaths.length.toLocaleString()}` });
+
+    const workQueue: Array<{ file: FileRecord }> = [];
+    const resultQueue: Array<{
+      file: FileRecord;
+      symbols: SymbolRecord[];
+      relations: RelationRecord[];
+      chunks: CodeChunk[];
+    }> = [];
+
+    let discoveryDone = false;
+    let writerDone = false;
+
+    const writerPromise = (async () => {
+      while (!writerDone || resultQueue.length > 0) {
+        if (resultQueue.length === 0) {
+          await new Promise((r) => setTimeout(r, 10));
+          continue;
+        }
+        const batch = resultQueue.splice(0, 32);
+        db.insertFilesBatch(batch.map((b) => b.file));
+        db.insertSymbolsBatch(batch.flatMap((b) => b.symbols));
+        db.insertRelationsBatch(batch.flatMap((b) => b.relations));
+        db.insertChunksBatch(batch.flatMap((b) => b.chunks));
       }
-      const file = filesByPath.get(filePath)!;
+    })();
+
+    const processFile = async (item: { file: FileRecord }) => {
+      const { file } = item;
       try {
-        const source = await readFile(path.join(this.workspacePath, filePath), 'utf8');
+        const source = await readFile(path.join(this.workspacePath, file.path), 'utf8');
+        const terms = [...new Set(source.match(/[\p{L}\p{N}_$.-]+/gu)?.map((t) => t.toLowerCase()) ?? [])];
+        const fileWithTerms = { ...file, terms };
         const parsed = await this.parser.parse(file.path, source, file.language);
         if (parsed) {
-          symbols.push(...parsed.symbols);
-          relations.push(...parsed.relations);
-          chunks.push(...(parsed.chunks.length > 0 ? parsed.chunks : this.chunker.chunk(file.path, source)));
+          resultQueue.push({
+            file: fileWithTerms,
+            symbols: parsed.symbols,
+            relations: parsed.relations,
+            chunks: parsed.chunks.length > 0 ? parsed.chunks : this.chunker.chunk(file.path, source)
+          });
         } else {
-          chunks.push(...this.chunker.chunk(file.path, source));
+          resultQueue.push({
+            file: fileWithTerms,
+            symbols: [],
+            relations: [],
+            chunks: this.chunker.chunk(file.path, source)
+          });
         }
       } catch {
         parseErrors++;
         try {
-          const source = await readFile(path.join(this.workspacePath, filePath), 'utf8');
-          chunks.push(...this.chunker.chunk(file.path, source));
+          const source = await readFile(path.join(this.workspacePath, file.path), 'utf8');
+          const terms = [...new Set(source.match(/[\p{L}\p{N}_$.-]+/gu)?.map((t) => t.toLowerCase()) ?? [])];
+          resultQueue.push({
+            file: { ...file, terms },
+            symbols: [],
+            relations: [],
+            chunks: this.chunker.chunk(file.path, source)
+          });
         } catch {
           parseErrors++;
         }
       }
+    };
+
+    let parsedCount = 0;
+    const workerLoop = async () => {
+      while (!discoveryDone || workQueue.length > 0) {
+        if (workQueue.length === 0) {
+          await new Promise((r) => setTimeout(r, 10));
+          continue;
+        }
+
+        while (resultQueue.length >= 32) {
+          await new Promise((r) => setTimeout(r, 10));
+        }
+
+        const mem = process.memoryUsage();
+        if (mem.rss > memoryLimit || mem.heapUsed > memoryLimit * 0.9) {
+          if (global.gc) global.gc();
+          await new Promise((r) => setTimeout(r, 100));
+          continue;
+        }
+
+        const task = workQueue.shift();
+        if (!task) continue;
+
+        await processFile(task);
+
+        parsedCount++;
+        if (parsedCount === 1 || parsedCount % 250 === 0) {
+          onProgress?.({
+            stage: 'parse',
+            current: parsedCount,
+            message: `Parsing files: ${parsedCount.toLocaleString()}`
+          });
+        }
+        if (verboseMem && parsedCount % 500 === 0) {
+          const curMem = process.memoryUsage();
+          console.log(`[MEM] files=${parsedCount} rss=${Math.round(curMem.rss / 1024 / 1024)}MB heap=${Math.round(curMem.heapUsed / 1024 / 1024)}MB external=${Math.round(curMem.external / 1024 / 1024)}MB`);
+        }
+      }
+    };
+
+    const workerPromises = Array.from({ length: numWorkers }, () => workerLoop());
+
+    for await (const item of scanner.discoverFiles()) {
+      if (item.status === 'accepted' && item.file) {
+        const oldFile = previousFilesMap.get(item.file.path);
+        previousFilesMap.delete(item.file.path);
+        if (oldFile?.hash === item.file.hash) {
+          unchanged++;
+          db.insertFilesBatch([oldFile]);
+          if (previous) {
+            const fileSymbols = previous.symbols.filter((s) => s.filePath === oldFile.path);
+            const fileRelations = previous.relations.filter((r) => r.filePath === oldFile.path);
+            const fileChunks = previous.chunks.filter((c) => c.filePath === oldFile.path);
+            const fileChunkIds = new Set(fileChunks.map((c) => c.id));
+            const fileVectors = previous.vectors.filter((v) => fileChunkIds.has(v.chunkId));
+
+            db.insertSymbolsBatch(fileSymbols);
+            db.insertRelationsBatch(fileRelations);
+            db.insertChunksBatch(fileChunks);
+            if (fileVectors.length > 0) {
+              db.insertVectorsBatch(fileVectors);
+            }
+          }
+        } else {
+          if (oldFile) changed++;
+          else added++;
+
+          while (workQueue.length >= 32) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+          workQueue.push({ file: item.file });
+        }
+      }
     }
-    onProgress?.({ stage: 'relations', message: `Resolving ${relations.length.toLocaleString()} relations` });
-    resolveRelations(relations, symbols);
+
+    discoveryDone = true;
+    await Promise.all(workerPromises);
+
+    writerDone = true;
+    await writerPromise;
+
+    const deleted = previousFilesMap.size;
+
+    onProgress?.({ stage: 'relations', message: 'Resolving relations' });
+    db.resolveRelations();
+
     const provider = this.options.embeddingProvider;
-    let vectors: VectorRecord[] = [];
-    let embeddingProvider = previous?.metadata.embeddingProvider;
-    let embeddingDimensions = previous?.metadata.embeddingDimensions;
-    if (provider) {
-      onProgress?.({ stage: 'embedding', current: 0, total: chunks.length, message: `Preparing embeddings for ${chunks.length.toLocaleString()} chunks` });
-      const dimensions = provider.dimensions();
-      if (!Number.isSafeInteger(dimensions) || dimensions < 1) throw new Error('Embedding provider dimensions must be a positive safe integer');
+    if (!skipEmbeddings && provider) {
       const providerId = provider.id ?? provider.constructor.name;
-      const compatible = previous?.metadata.embeddingProvider === providerId && previous.metadata.embeddingDimensions === dimensions;
-      const cache = new EmbeddingCache(compatible ? previous?.vectors : []);
-      const uniqueMissing = [...new Map(chunks.filter((chunk) => !cache.get(chunk.hash)).map((chunk) => [chunk.hash, chunk])).values()];
-      for (const vector of await this.embeddingQueue.embed(provider, uniqueMissing, providerId)) cache.set(vector);
-      vectors = chunks.flatMap((chunk) => {
-        const cached = cache.get(chunk.hash);
-        return cached ? [{ ...cached, chunkId: chunk.id }] : [];
-      });
-      embeddingProvider = providerId;
-      embeddingDimensions = dimensions;
-    } else if (previous?.vectors.length) {
-      const chunksByHash = new Map(chunks.map((chunk) => [chunk.hash, chunk]));
-      vectors = previous.vectors.flatMap((vector) => {
-        const chunk = chunksByHash.get(vector.chunkHash);
-        return chunk ? [{ ...vector, chunkId: chunk.id }] : [];
-      });
+      const existingVectorChunkIds = new Set(
+        (db.db.prepare('SELECT chunkId FROM vectors').all() as Array<{ chunkId: string }>).map((row) => row.chunkId)
+      );
+      for (const batch of db.streamChunks(200)) {
+        const chunkBatch = batch as CodeChunk[];
+        const missingInBatch = chunkBatch.filter((c) => !existingVectorChunkIds.has(c.id));
+        if (missingInBatch.length > 0) {
+          const uniqueMissing = [...new Map(missingInBatch.map((c) => [c.hash, c])).values()];
+          const vectors = await this.embeddingQueue.embed(provider, uniqueMissing as CodeChunk[], providerId);
+          db.insertVectorsBatch(vectors);
+        }
+      }
     }
+
+    const now = new Date().toISOString();
+    const counts = db.getCounts();
+
     const metadata: IndexMetadata = {
       uid: this.uid,
       workspaceRoot: this.workspacePath,
@@ -182,36 +285,102 @@ export class IndexManager {
       indexerVersion: '0.1.0',
       createdAt: previous?.metadata.createdAt ?? now,
       updatedAt: now,
-      fileCount: files.length,
-      symbolCount: symbols.length,
-      relationCount: relations.length,
-      chunkCount: chunks.length,
-      vectorCount: vectors.length,
-      ...(embeddingProvider ? { embeddingProvider } : {}),
-      ...(embeddingDimensions ? { embeddingDimensions } : {}),
+      fileCount: counts.files,
+      symbolCount: counts.symbols,
+      relationCount: counts.relations,
+      chunkCount: counts.chunks,
+      vectorCount: counts.vectors,
+      ...(provider ? { embeddingProvider: provider.id ?? provider.constructor.name, embeddingDimensions: provider.dimensions() } : {}),
       ...(this.options.indexLabel ? { indexLabel: this.options.indexLabel } : {}),
       ...(this.options.indexGroup ? { indexGroup: this.options.indexGroup } : {}),
       ...(this.options.indexPart ? { indexPart: this.options.indexPart } : {}),
       ...(this.options.indexPartCount ? { indexPartCount: this.options.indexPartCount } : {}),
       configurationHash: createHash('sha256').update(JSON.stringify({
-        maxFileSize: this.options.maxFileSize ?? 1024 * 1024,
+        maxFileSize: this.options.maxFileSize ?? 5 * 1024 * 1024,
         patterns: this.options.patterns ?? [],
         partitionId: this.options.partitionId,
         includeFiles: this.options.includeFiles
       })).digest('hex')
     };
-    const snapshot: IndexSnapshot = {
-      metadata,
-      files,
-      symbols,
-      relations,
-      chunks,
-      vectors
+
+    db.setMetadata(metadata);
+
+    onProgress?.({ stage: 'persist', message: 'Writing binary index atomically' });
+    await IndexWriter.writeAtomicFromDatabase(this.indexPath, db);
+
+    const snapshot = (isLarge || counts.symbols > 100000)
+      ? { metadata, files: [], symbols: [], relations: [], chunks: [], vectors: [] }
+      : db.toSnapshot();
+    db.close();
+    await rm(stagingDbPath, { force: true });
+
+    onProgress?.({ stage: 'complete', current: counts.files, total: counts.files, message: 'Indexing complete' });
+    return { indexPath: this.indexPath, snapshot, added, changed, unchanged, deleted, errors: parseErrors };
+  }
+
+  async generateEmbeddings(provider?: EmbeddingProvider, onProgress?: (progress: IndexProgress) => void): Promise<number> {
+    const embedProvider = provider ?? this.options.embeddingProvider;
+    if (!embedProvider) {
+      throw new Error('No embedding provider configured. Specify an embedding provider to generate embeddings.');
+    }
+    const dimensions = embedProvider.dimensions();
+    const providerId = embedProvider.id ?? embedProvider.constructor.name;
+
+    const stagingDbPath = `${this.indexPath}.staging.db`;
+    await rm(stagingDbPath, { force: true });
+    const db = new StagingDatabase(stagingDbPath);
+
+    let previous: IndexSnapshot | undefined;
+    try {
+      previous = await IndexReader.read(this.indexPath, this.uid);
+    } catch (error) {
+      db.close();
+      await rm(stagingDbPath, { force: true });
+      throw new Error(`Cannot generate embeddings: no valid index found at ${this.indexPath}`);
+    }
+
+    db.setMetadata(previous.metadata);
+    db.insertFilesBatch(previous.files);
+    db.insertSymbolsBatch(previous.symbols);
+    db.insertRelationsBatch(previous.relations);
+    db.insertChunksBatch(previous.chunks);
+    db.insertVectorsBatch(previous.vectors);
+
+    const existingVectorChunkIds = new Set(previous.vectors.map((v) => v.chunkId));
+    let addedVectors = 0;
+
+    for (const batch of db.streamChunks(200)) {
+      const chunkBatch = batch as CodeChunk[];
+      const missingInBatch = chunkBatch.filter((c) => !existingVectorChunkIds.has(c.id));
+      if (missingInBatch.length > 0) {
+        const uniqueMissing = [...new Map(missingInBatch.map((c) => [c.hash, c])).values()];
+        const vectors = await this.embeddingQueue.embed(embedProvider, uniqueMissing as CodeChunk[], providerId);
+        db.insertVectorsBatch(vectors);
+        addedVectors += vectors.length;
+        onProgress?.({
+          stage: 'embedding',
+          current: addedVectors,
+          total: previous.chunks.length,
+          message: `Generated embeddings: ${addedVectors.toLocaleString()}`
+        });
+      }
+    }
+
+    const counts = db.getCounts();
+    const metadata: IndexMetadata = {
+      ...previous.metadata,
+      vectorCount: counts.vectors,
+      embeddingProvider: providerId,
+      embeddingDimensions: dimensions,
+      updatedAt: new Date().toISOString()
     };
-    onProgress?.({ stage: 'persist', message: 'Writing the binary index atomically' });
-    await IndexWriter.writeAtomic(this.indexPath, snapshot);
-    onProgress?.({ stage: 'complete', current: files.length, total: files.length, message: 'Indexing complete' });
-    return { indexPath: this.indexPath, snapshot, added, changed, unchanged, deleted, errors: scan.errors.length + parseErrors };
+    db.setMetadata(metadata);
+
+    await IndexWriter.writeAtomicFromDatabase(this.indexPath, db);
+    db.close();
+    await rm(stagingDbPath, { force: true });
+
+    return counts.vectors;
   }
 
   async read(): Promise<IndexSnapshot> {

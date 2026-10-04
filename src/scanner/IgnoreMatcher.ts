@@ -11,7 +11,9 @@ export const DEFAULT_EXCLUDES = [
   'target/',
   'coverage/',
   '.cache/',
-  '.tmp/'
+  '.tmp/',
+  'temp/',
+  'vendor/'
 ];
 
 export interface IgnoreMatcherOptions {
