@@ -1,6 +1,6 @@
 node_modules/
 dist/
-runtime/
+/runtime/
 *.blob
 codebase-indexer-*.tar.gz
 codebase-indexer-*.zip
