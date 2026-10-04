@@ -1,2 +1,8 @@
 node_modules/
 dist/
+runtime/
+*.blob
+codebase-indexer-*.tar.gz
+codebase-indexer-*.zip
+codebase-indexer-*.sha256
+SHA256SUMS
