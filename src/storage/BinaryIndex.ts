@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { decode, encode } from '@msgpack/msgpack';
 import {
@@ -9,6 +9,7 @@ import {
   INDEX_MAGIC,
   type IndexSnapshot
 } from './IndexFormat.js';
+import type { StagingDatabase } from './StagingDatabase.js';
 
 export class IndexFormatError extends Error {
   constructor(message: string) {
@@ -47,6 +48,136 @@ export class IndexWriter {
       throw error;
     }
   }
+
+  static async writeAtomicFromDatabase(filePath: string, db: StagingDatabase): Promise<void> {
+    const counts = db.getCounts();
+    const meta = db.getMetadata() as import('./IndexFormat.js').IndexMetadata;
+    meta.fileCount = counts.files;
+    meta.symbolCount = counts.symbols;
+    meta.relationCount = counts.relations;
+    meta.chunkCount = counts.chunks;
+    meta.vectorCount = counts.vectors;
+
+    const uid = Buffer.from(meta.uid, 'utf8');
+    if (uid.length > 0xffff) throw new Error('Index UID is too long');
+
+    const temporaryPath = `${filePath}.tmp`;
+    const temporaryPayloadPath = `${filePath}.payload.tmp`;
+
+    await mkdir(path.dirname(filePath), { recursive: true });
+
+    try {
+      const payloadHandle = await open(temporaryPayloadPath, 'w');
+      try {
+        await payloadHandle.write(Buffer.from([0x86]));
+
+        await payloadHandle.write(Buffer.from(encode('metadata')));
+        await payloadHandle.write(Buffer.from(encode(meta)));
+
+        await payloadHandle.write(Buffer.from(encode('files')));
+        await payloadHandle.write(encodeArrayHeader(counts.files));
+        for (const batch of db.streamFiles(2000)) {
+          const bufs = batch.map((item: unknown) => encode(item));
+          await payloadHandle.write(Buffer.concat(bufs));
+        }
+
+        await payloadHandle.write(Buffer.from(encode('symbols')));
+        await payloadHandle.write(encodeArrayHeader(counts.symbols));
+        for (const batch of db.streamSymbols(2000)) {
+          const bufs = batch.map((item: unknown) => encode(item));
+          await payloadHandle.write(Buffer.concat(bufs));
+        }
+
+        await payloadHandle.write(Buffer.from(encode('relations')));
+        await payloadHandle.write(encodeArrayHeader(counts.relations));
+        for (const batch of db.streamRelations(2000)) {
+          const bufs = batch.map((item: unknown) => encode(item));
+          await payloadHandle.write(Buffer.concat(bufs));
+        }
+
+        await payloadHandle.write(Buffer.from(encode('chunks')));
+        await payloadHandle.write(encodeArrayHeader(counts.chunks));
+        for (const batch of db.streamChunks(2000)) {
+          const bufs = batch.map((item: unknown) => encode(item));
+          await payloadHandle.write(Buffer.concat(bufs));
+        }
+
+        await payloadHandle.write(Buffer.from(encode('vectors')));
+        await payloadHandle.write(encodeArrayHeader(counts.vectors));
+        for (const batch of db.streamVectors(2000)) {
+          const bufs = batch.map((item: unknown) => encode(item));
+          await payloadHandle.write(Buffer.concat(bufs));
+        }
+
+        await payloadHandle.sync();
+      } finally {
+        await payloadHandle.close();
+      }
+
+      const payloadStats = await stat(temporaryPayloadPath);
+      const payloadLength = BigInt(payloadStats.size);
+
+      const header = Buffer.alloc(INDEX_HEADER_SIZE);
+      INDEX_MAGIC.copy(header, 0);
+      header.writeUInt16BE(INDEX_FORMAT_VERSION, 8);
+      header.writeUInt16BE(0, 10);
+      header.writeUInt16BE(uid.length, 12);
+      header.writeBigUInt64BE(payloadLength, 14);
+
+      const hash = createHash('sha256');
+      hash.update(header);
+      hash.update(uid);
+
+      const outHandle = await open(temporaryPath, 'w');
+      try {
+        await outHandle.write(header);
+        await outHandle.write(uid);
+
+        const readPayloadHandle = await open(temporaryPayloadPath, 'r');
+        try {
+          const chunkSize = 64 * 1024;
+          const buffer = Buffer.alloc(chunkSize);
+          let bytesRead = 0;
+          let position = 0;
+          while ((bytesRead = (await readPayloadHandle.read(buffer, 0, chunkSize, position)).bytesRead) > 0) {
+            const slice = buffer.subarray(0, bytesRead);
+            hash.update(slice);
+            await outHandle.write(slice);
+            position += bytesRead;
+          }
+        } finally {
+          await readPayloadHandle.close();
+        }
+
+        const checksum = hash.digest();
+        await outHandle.write(checksum);
+        await outHandle.sync();
+      } finally {
+        await outHandle.close();
+      }
+
+      await rm(temporaryPayloadPath, { force: true });
+      await rename(temporaryPath, filePath);
+    } catch (error) {
+      await rm(temporaryPath, { force: true });
+      await rm(temporaryPayloadPath, { force: true });
+      throw error;
+    }
+  }
+}
+
+function encodeArrayHeader(len: number): Buffer {
+  if (len <= 15) return Buffer.from([0x90 | len]);
+  if (len <= 0xffff) {
+    const buf = Buffer.alloc(3);
+    buf[0] = 0xdc;
+    buf.writeUInt16BE(len, 1);
+    return buf;
+  }
+  const buf = Buffer.alloc(5);
+  buf[0] = 0xdd;
+  buf.writeUInt32BE(len, 1);
+  return buf;
 }
 
 export class IndexReader {

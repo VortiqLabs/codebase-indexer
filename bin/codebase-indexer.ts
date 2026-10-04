@@ -74,32 +74,70 @@ async function main(): Promise<void> {
   }
 
   const workspacePath = path.resolve(firstValue(parsed, '--path') ?? parsed.positionals[0] ?? '.');
+  const profile = (firstValue(parsed, '--profile') as 'default' | 'large' | undefined) ?? 'default';
+  const workers = firstValue(parsed, '--workers') ? Number(firstValue(parsed, '--workers')) : undefined;
+  const memoryLimitMb = firstValue(parsed, '--memory-limit') ? Number(firstValue(parsed, '--memory-limit')) : undefined;
+  const noEmbeddings = parsed.flags.has('--no-embeddings');
+  const verboseMemory = parsed.flags.has('--verbose-memory');
+
   const manager = await IndexManager.create({
     workspacePath,
     ...(firstValue(parsed, '--index-dir') ? { indexDir: path.resolve(firstValue(parsed, '--index-dir')!) } : {}),
     ...(firstValue(parsed, '--max-file-size') ? { maxFileSize: parseSize(firstValue(parsed, '--max-file-size')!) } : {}),
-    ...(parsed.values.has('--ignore') ? { patterns: parsed.values.get('--ignore')! } : {})
+    ...(parsed.values.has('--ignore') ? { patterns: parsed.values.get('--ignore')! } : {}),
+    ...(workers ? { workers } : {}),
+    ...(memoryLimitMb ? { memoryLimitMb } : {}),
+    ...(profile ? { profile } : {}),
+    noEmbeddings,
+    verboseMemory
   });
 
   switch (command) {
     case 'index': {
-      const result = await manager.index(parsed.flags.has('--force'));
-      if (json) {
-        console.log(JSON.stringify({
-          uid: manager.uid,
-          indexPath: result.indexPath,
-          added: result.added,
-          changed: result.changed,
-          unchanged: result.unchanged,
-          deleted: result.deleted,
-          errors: result.errors,
-          metadata: result.snapshot.metadata
-        }, null, 2));
-      } else {
-        console.log(`Index updated: ${result.indexPath}`);
-        console.log(`Files: ${result.snapshot.metadata.fileCount} (${result.added} added, ${result.changed} changed, ${result.unchanged} unchanged, ${result.deleted} deleted)`);
-        if (result.errors > 0) console.log(`Scan errors: ${result.errors}`);
+      const startTime = Date.now();
+      let peakRss = process.memoryUsage().rss;
+      const memInterval = setInterval(() => {
+        const rss = process.memoryUsage().rss;
+        if (rss > peakRss) peakRss = rss;
+      }, 100);
+
+      try {
+        const result = await manager.index(parsed.flags.has('--force'), (progress) => {
+          if (!json && progress.message) {
+            console.log(progress.message);
+          }
+        });
+        const duration = (Date.now() - startTime) / 1000;
+        if (json) {
+          console.log(JSON.stringify({
+            uid: manager.uid,
+            indexPath: result.indexPath,
+            added: result.added,
+            changed: result.changed,
+            unchanged: result.unchanged,
+            deleted: result.deleted,
+            errors: result.errors,
+            metadata: result.snapshot.metadata,
+            durationSeconds: duration,
+            peakMemoryMb: Math.round(peakRss / 1024 / 1024)
+          }, null, 2));
+        } else {
+          console.log(`Index updated: ${result.indexPath}`);
+          console.log(`Files: ${result.snapshot.metadata.fileCount} (${result.added} added, ${result.changed} changed, ${result.unchanged} unchanged, ${result.deleted} deleted)`);
+          console.log(`Duration: ${duration.toFixed(2)}s, Peak Memory: ${Math.round(peakRss / 1024 / 1024)}MB`);
+          if (result.errors > 0) console.log(`Scan/Parse errors: ${result.errors}`);
+        }
+      } finally {
+        clearInterval(memInterval);
       }
+      return;
+    }
+    case 'embeddings': {
+      const count = await manager.generateEmbeddings(undefined, (progress) => {
+        if (!json) console.log(`${progress.stage}: ${progress.message}`);
+      });
+      if (json) console.log(JSON.stringify({ embeddings: count, indexPath: manager.indexPath }));
+      else console.log(`Embeddings generated: ${count} vectors in ${manager.indexPath}`);
       return;
     }
     case 'status': {
@@ -240,7 +278,7 @@ function parseArguments(args: string[]): Arguments {
   const positionals: string[] = [];
   const flags = new Set<string>();
   const values = new Map<string, string[]>();
-  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index', '--host', '--port', '--ref', '--depth', '--max-nodes']);
+  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index', '--host', '--port', '--ref', '--depth', '--max-nodes', '--workers', '--memory-limit', '--profile']);
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     if (!arg.startsWith('--')) {
@@ -309,7 +347,7 @@ function parseGitHubRepository(value: string): { owner: string; repository: stri
 
 function printHelp(): void {
   console.log('codebase-indexer <index|index-github|status|search|symbols|references|callers|callees|files|inspect|remove|watch|dashboard|mcp> [path or query] [options]');
-  console.log('Options: --index-dir <path> --force --json --max-file-size <size> --ignore <pattern> --host <host> --port <port> --ref <github-ref>');
+  console.log('Options: --index-dir <path> --force --json --max-file-size <size> --ignore <pattern> --host <host> --port <port> --ref <github-ref> --workers <number> --memory-limit <MB> --profile <default|large> --no-embeddings --verbose-memory');
 }
 
 main().catch((error: unknown) => {
