@@ -2,6 +2,8 @@ import express, { type Express } from 'express';
 import { Worker } from 'node:worker_threads';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { runtimePath } from '../runtime/runtime-paths.js';
+import { pathToFileURL } from 'node:url';
 import { indexGitHubRepository } from '../github/GitHubRepositoryIndexer.js';
 import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
@@ -15,10 +17,20 @@ import { GitHubIndexJobs } from './GitHubIndexJobs.js';
 import { GRAPH_PAGE } from './GraphPage.js';
 
 const execFileAsync = promisify(execFile);
-const graphClientPath = fileURLToPath(new URL('../../dashboard/graph-client.js', import.meta.url));
-const monacoAssetsPath = fileURLToPath(new URL('../../dashboard/monaco', import.meta.url));
-const indexWorkerPath = fileURLToPath(new URL('./IndexSnapshotWorker.js', import.meta.url));
+const graphClientPath = runtimePath(
+  'dashboard',
+  'graph-client.js'
+);
 
+const monacoAssetsPath = runtimePath(
+  'dashboard',
+  'monaco'
+);
+
+const indexWorkerPath = runtimePath(
+  'workers',
+  'IndexSnapshotWorker.js'
+);
 export interface DashboardAppOptions {
   githubRepositoryIndexer?: typeof indexGitHubRepository;
 }

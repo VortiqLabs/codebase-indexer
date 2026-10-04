@@ -25,7 +25,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && mkdir -p dist/src/parser/grammars && cp -R src/parser/grammars/. dist/src/parser/grammars/ && esbuild src/dashboard/graph-client.js --bundle --minify --format=iife --platform=browser --outfile=dist/dashboard/graph-client.js && mkdir -p dist/dashboard/monaco && cp -R node_modules/monaco-editor/min/vs dist/dashboard/monaco/",
+    "build": "rm -rf dist && tsc -p tsconfig.json && mkdir -p dist/grammars dist/tree-sitter-wasms dist/workers dist/dashboard && cp -R src/parser/grammars/. dist/grammars/ && cp -R node_modules/tree-sitter-wasms/out/. dist/tree-sitter-wasms/ && cp dist/src/github/GitHubIndexPartWorker.js dist/workers/ && cp dist/src/dashboard/IndexSnapshotWorker.js dist/workers/ && esbuild src/dashboard/graph-client.js --bundle --minify --format=iife --platform=browser --outfile=dist/dashboard/graph-client.js && cp -R node_modules/monaco-editor/min/vs dist/dashboard/monaco",
     "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "dependencies": {
@@ -42,6 +42,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^24.19.0",
+    "@types/d3": "^7.4.3",
     "d3": "^7.9.0",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.0"

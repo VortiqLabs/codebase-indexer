@@ -3,17 +3,21 @@ import { mkdtemp, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/p
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Worker } from 'node:worker_threads';
 import * as tar from 'tar';
 import type { IndexProgress } from '../core/IndexManager.js';
 import { FileScanner } from '../scanner/FileScanner.js';
+import { runtimePath } from '../runtime/runtime-paths.js';
 
 const MAX_ARCHIVE_SIZE = 512 * 1024 * 1024;
 const FILES_PER_INDEX_PART = 100;
 const SOURCE_BYTES_PER_INDEX_PART = 32 * 1024 * 1024;
-const INDEX_PART_WORKER_PATH = new URL('./GitHubIndexPartWorker.js', import.meta.url);
+const INDEX_PART_WORKER_PATH = pathToFileURL(
+  runtimePath('workers', 'GitHubIndexPartWorker.js')
+);
 const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9._-]{1,100}$/u;
 
@@ -221,7 +225,7 @@ function runIndexPartWorker(
   onProgress: (progress: IndexProgress) => void
 ): Promise<{ part: GitHubRepositoryIndexPart; errors: number }> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(INDEX_PART_WORKER_PATH, {
+const worker = new Worker(INDEX_PART_WORKER_PATH, {
       workerData: request,
       resourceLimits: { maxOldGenerationSizeMb: 768, maxYoungGenerationSizeMb: 128 }
     });

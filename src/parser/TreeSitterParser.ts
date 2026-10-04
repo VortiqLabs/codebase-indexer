@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runtimePath } from '../runtime/runtime-paths.js';
 import { Language, Parser, type Node as SyntaxNode, type Tree } from 'web-tree-sitter';
 import type { CodeChunk } from '../types/CodeChunk.js';
 import type { RelationRecord } from '../types/Relation.js';
@@ -13,11 +13,18 @@ export interface ParsedFile {
   chunks: CodeChunk[];
 }
 
-const require = createRequire(import.meta.url);
 const languages = new Map<string, Promise<Language>>();
 let initialized: Promise<void> | undefined;
 const localGrammars = new Set(['dockerfile', 'elm', 'gitignore', 'make', 'markdown', 'ql', 'sql', 'yaml']);
+function runtimeRoot(): string {
+  const configuredRoot = process.env.CODEBASE_INDEXER_RUNTIME_ROOT;
 
+  if (configuredRoot) {
+    return path.resolve(configuredRoot);
+  }
+
+  return path.dirname(fileURLToPath(import.meta.url));
+}
 const grammars: Record<string, string> = {
   bash: 'bash',
   c: 'c',
@@ -133,19 +140,33 @@ export class TreeSitterParser {
 
 async function getLanguage(grammar: string): Promise<Language | undefined> {
   let languagePromise = languages.get(grammar);
+
   if (!languagePromise) {
     languagePromise = (async () => {
       try {
+        const root = runtimeRoot();
+
         const wasmPath = localGrammars.has(grammar)
-          ? path.join(path.dirname(fileURLToPath(import.meta.url)), 'grammars', `${grammar}.wasm`)
-          : require.resolve(`tree-sitter-wasms/out/tree-sitter-${grammar}.wasm`);
+          ? path.join(
+              root,
+              'grammars',
+              `${grammar}.wasm`
+            )
+          : path.join(
+              root,
+              'tree-sitter-wasms',
+              `tree-sitter-${grammar}.wasm`
+            );
+
         return await Language.load(path.resolve(wasmPath));
       } catch {
         return undefined as unknown as Language;
       }
     })();
+
     languages.set(grammar, languagePromise);
   }
+
   const loaded = await languagePromise;
   return loaded ?? undefined;
 }
