@@ -254,6 +254,109 @@ async function main(): Promise<void> {
       else for (const region of regions) console.log(`${region.filePath}:${region.line} ${region.kind} confidence=${region.confidence}`);
       return;
     }
+    case 'impact': {
+      const target = parsed.positionals.join(' ');
+      if (!target) throw new Error('impact requires a target symbol or file');
+      const impact = await manager.analyzeImpact(target);
+      if (json) console.log(JSON.stringify(impact, null, 2));
+      else {
+        console.log(`Impact analysis for ${impact.target}:`);
+        console.log(`  Direct dependents: ${impact.directDependents.length}`);
+        for (const dep of impact.directDependents) console.log(`    - ${dep.name} (${dep.filePath})`);
+        console.log(`  Transitive dependents: ${impact.transitiveDependents.length}`);
+        for (const dep of impact.transitiveDependents) console.log(`    - ${dep.name} (${dep.filePath})`);
+        console.log(`  Affected APIs: ${impact.affectedApis.join(', ') || 'None'}`);
+        console.log(`  Affected Tests: ${impact.affectedTests.join(', ') || 'None'}`);
+      }
+      return;
+    }
+    case 'tests': {
+      const query = parsed.positionals.join(' ');
+      if (!query) throw new Error('tests requires a query');
+      const tests = await manager.findTests(query);
+      if (json) console.log(JSON.stringify(tests, null, 2));
+      else for (const t of tests) console.log(`${t.testFile} -> ${t.targetSymbol ?? t.targetFile ?? ''} (${t.relationship})`);
+      return;
+    }
+    case 'affected-tests': {
+      const files = parsed.positionals;
+      if (files.length === 0) throw new Error('affected-tests requires one or more changed files');
+      const tests = await manager.findAffectedTests(files);
+      if (json) console.log(JSON.stringify(tests, null, 2));
+      else for (const t of tests) console.log(`${t.testFile} (${t.relationship})`);
+      return;
+    }
+    case 'database': {
+      const schema = await manager.getDatabaseSchema();
+      if (json) console.log(JSON.stringify(schema, null, 2));
+      else for (const model of schema) console.log(`${model.kind.toUpperCase()} ${model.name} (${model.filePath})`);
+      return;
+    }
+    case 'history': {
+      const history = await manager.getGitHistory();
+      if (json) console.log(JSON.stringify(history, null, 2));
+      else {
+        console.log(`Git Branch: ${history.branch}`);
+        for (const c of history.commits) console.log(`${c.hash} ${c.author} (${c.date}): ${c.subject}`);
+      }
+      return;
+    }
+    case 'changes': {
+      const changes = await manager.getChanges();
+      if (json) console.log(JSON.stringify(changes, null, 2));
+      else {
+        console.log(`Branch: ${changes.branch}`);
+        console.log(`Uncommitted changed files: ${changes.changedFiles.length}`);
+        for (const f of changes.changedFiles) console.log(`${f.code} ${f.filePath}`);
+      }
+      return;
+    }
+    case 'coupling': {
+      const couplings = await manager.getChangeCoupling();
+      if (json) console.log(JSON.stringify(couplings, null, 2));
+      else for (const c of couplings) console.log(`${c.fileA} <-> ${c.fileB} = ${c.couplingPercentage}%`);
+      return;
+    }
+    case 'complexity': {
+      const complexity = await manager.getComplexity();
+      if (json) console.log(JSON.stringify(complexity, null, 2));
+      else for (const f of complexity) console.log(`${f.filePath} loc=${f.loc} complexity=${f.cyclomaticComplexity}`);
+      return;
+    }
+    case 'hotspots': {
+      const hotspots = await manager.getHotspots();
+      if (json) console.log(JSON.stringify(hotspots, null, 2));
+      else for (const h of hotspots) console.log(`${h.filePath} risk=${h.risk} (${h.explanation})`);
+      return;
+    }
+    case 'duplicates': {
+      const duplicates = await manager.getDuplicates();
+      if (json) console.log(JSON.stringify(duplicates, null, 2));
+      else for (const d of duplicates) console.log(`${d.type} ${d.filePath1}:${d.startLine1} <-> ${d.filePath2}:${d.startLine2}`);
+      return;
+    }
+    case 'explain': {
+      const name = parsed.positionals.join(' ');
+      if (!name) throw new Error('explain requires a symbol name');
+      const explanation = await manager.explainSymbol(name);
+      if (json) console.log(JSON.stringify(explanation, null, 2));
+      else {
+        console.log(`Symbol: ${explanation.symbolName} (${explanation.kind ?? 'unknown'})`);
+        if (explanation.definition) console.log(`Definition: ${explanation.definition.filePath}:${explanation.definition.startLine}`);
+        console.log(`Exported: ${explanation.isExported}`);
+        console.log(`Callers (${explanation.callers.length}): ${explanation.callers.join(', ')}`);
+        console.log(`Callees (${explanation.callees.length}): ${explanation.callees.join(', ')}`);
+        console.log(`Tests (${explanation.tests.length}): ${explanation.tests.join(', ')}`);
+        console.log(`APIs (${explanation.apis.length}): ${explanation.apis.join(', ')}`);
+      }
+      return;
+    }
+    case 'cycles': {
+      const cycles = await manager.findDependencyCycles();
+      if (json) console.log(JSON.stringify(cycles, null, 2));
+      else for (const c of cycles) console.log(`${c.id}: ${c.symbols.join(' -> ')}`);
+      return;
+    }
     case 'remove': {
       if (!parsed.flags.has('--force')) {
         const prompt = createInterface({ input: stdin, output: stdout });
@@ -346,7 +449,7 @@ function parseGitHubRepository(value: string): { owner: string; repository: stri
 }
 
 function printHelp(): void {
-  console.log('codebase-indexer <index|index-github|status|search|symbols|references|callers|callees|files|inspect|remove|watch|dashboard|mcp> [path or query] [options]');
+  console.log('codebase-indexer <index|index-github|status|search|symbols|references|callers|callees|deps|dependents|path|cycles|map|api|intent|sensitive|impact|tests|affected-tests|database|history|changes|coupling|complexity|hotspots|duplicates|explain|files|inspect|remove|watch|dashboard|mcp> [path or query] [options]');
   console.log('Options: --index-dir <path> --force --json --max-file-size <size> --ignore <pattern> --host <host> --port <port> --ref <github-ref> --workers <number> --memory-limit <MB> --profile <default|large> --no-embeddings --verbose-memory');
 }
 

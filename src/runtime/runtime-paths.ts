@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import { fileURLToPath } from 'node:url';
+
 export function runtimeRoot(): string {
   // Explicit override — useful for development/testing.
   const configuredRoot = process.env.CODEBASE_INDEXER_RUNTIME_ROOT;
@@ -8,19 +10,21 @@ export function runtimeRoot(): string {
     return path.resolve(configuredRoot);
   }
 
-  // SEA executable:
-  // A SEA application has no JavaScript entry-file argument.
-  if (process.argv[1] === undefined) {
-    return path.dirname(process.execPath);
+  try {
+    const metaUrl = import.meta.url;
+    if (metaUrl) {
+      const currentDir = path.dirname(fileURLToPath(metaUrl));
+      return path.resolve(currentDir, '..', '..');
+    }
+  } catch {
+    // Fallback
   }
 
-  // Normal Node execution:
-  // `process.argv[1]` is the actual CLI entrypoint.
-  //
-  // dist/bin/codebase-indexer.js
-  //       ↓
-  // dist/
-  return path.resolve(path.dirname(process.argv[1]), '..');
+  if (process.argv[1] !== undefined) {
+    return path.resolve(path.dirname(process.argv[1]), '..');
+  }
+
+  return path.dirname(process.execPath);
 }
 
 export function runtimePath(...parts: string[]): string {

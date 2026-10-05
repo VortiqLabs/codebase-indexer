@@ -5,9 +5,17 @@ import type { SymbolRecord } from '../types/Symbol.js';
 import { ContextBuilder, type CodeContext, type ContextOptions } from '../context/ContextBuilder.js';
 import type { ApiEndpoint } from '../intelligence/ApiDetector.js';
 import { classifyQuery, type QueryIntent } from '../intelligence/QueryIntent.js';
-import { findDependencyRelations, findSymbolPath, type GraphPathResult } from '../intelligence/GraphQuery.js';
+import { findDependencyRelations, findSymbolPath, type GraphPathResult, type GraphCycle } from '../intelligence/GraphQuery.js';
 import { buildRepositoryMap, type RepositoryMap } from '../intelligence/RepositoryMap.js';
 import { detectSensitiveRegions, type SensitiveRegion } from '../intelligence/SensitiveDetector.js';
+import type { ImpactAnalysisResult } from '../intelligence/ImpactAnalyzer.js';
+import type { TestMapping } from '../intelligence/TestAnalyzer.js';
+import type { DatabaseModelInfo } from '../intelligence/DatabaseAnalyzer.js';
+import type { GitHistoryResult } from '../intelligence/GitHistory.js';
+import type { FileChangeCoupling, Hotspot } from '../intelligence/ChangeAnalyzer.js';
+import type { FileComplexity } from '../intelligence/ComplexityAnalyzer.js';
+import type { DuplicateMatch } from '../intelligence/DuplicateDetector.js';
+import type { SymbolExplanation } from '../intelligence/ExplainSymbol.js';
 
 export class CodebaseIndexer {
   private manager?: IndexManager;
@@ -86,6 +94,54 @@ export class CodebaseIndexer {
 
   async findSensitiveRegions(): Promise<SensitiveRegion[]> {
     return this.getManager().findSensitiveRegions();
+  }
+
+  async analyzeImpact(target: string, maxDepth = 5): Promise<ImpactAnalysisResult> {
+    return this.getManager().analyzeImpact(target, maxDepth);
+  }
+
+  async findTests(query: string): Promise<TestMapping[]> {
+    return this.getManager().findTests(query);
+  }
+
+  async findAffectedTests(changedFiles: string[]): Promise<TestMapping[]> {
+    return this.getManager().findAffectedTests(changedFiles);
+  }
+
+  async getDatabaseSchema(): Promise<DatabaseModelInfo[]> {
+    return this.getManager().getDatabaseSchema();
+  }
+
+  async getGitHistory(limit = 20): Promise<GitHistoryResult> {
+    return this.getManager().getGitHistory(limit);
+  }
+
+  async getChanges(): Promise<GitHistoryResult> {
+    return this.getManager().getChanges();
+  }
+
+  async getChangeCoupling(limit = 50): Promise<FileChangeCoupling[]> {
+    return this.getManager().getChangeCoupling(limit);
+  }
+
+  async getHotspots(limit = 10): Promise<Hotspot[]> {
+    return this.getManager().getHotspots(limit);
+  }
+
+  async getComplexity(): Promise<FileComplexity[]> {
+    return this.getManager().getComplexity();
+  }
+
+  async getDuplicates(minLines = 3): Promise<DuplicateMatch[]> {
+    return this.getManager().getDuplicates(minLines);
+  }
+
+  async explainSymbol(symbolName: string): Promise<SymbolExplanation> {
+    return this.getManager().explainSymbol(symbolName);
+  }
+
+  async findDependencyCycles(): Promise<GraphCycle[]> {
+    return this.getManager().findDependencyCycles();
   }
 
   async getContext(query: string, options: ContextOptions = {}): Promise<CodeContext> {
