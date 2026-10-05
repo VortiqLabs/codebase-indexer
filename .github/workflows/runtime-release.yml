@@ -38,7 +38,7 @@ jobs:
           # macOS x64 / Intel
           - platform: darwin
             arch: x64
-            runner: macos-13
+            runner: macos-15-intel
             archive: tar.gz
 
           # macOS ARM64 / Apple Silicon
