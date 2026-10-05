@@ -8,6 +8,17 @@ import { IndexManager } from '../core/IndexManager.js';
 import { indexGitHubRepository } from '../github/GitHubRepositoryIndexer.js';
 import { IndexReader } from '../storage/BinaryIndex.js';
 import type { IndexSnapshot } from '../storage/IndexFormat.js';
+import { buildRepositoryMap } from '../intelligence/RepositoryMap.js';
+import { findDependencyRelations, findSymbolPath, findGraphCycles } from '../intelligence/GraphQuery.js';
+import { ContextBuilder } from '../context/ContextBuilder.js';
+import { analyzeImpact } from '../intelligence/ImpactAnalyzer.js';
+import { findTests, findAffectedTests } from '../intelligence/TestAnalyzer.js';
+import { detectApiEndpoints } from '../intelligence/ApiDetector.js';
+import { analyzeDatabaseSchema } from '../intelligence/DatabaseAnalyzer.js';
+import { getGitHistory } from '../intelligence/GitHistory.js';
+import { analyzeChangeCoupling, detectHotspots } from '../intelligence/ChangeAnalyzer.js';
+import { analyzeComplexity } from '../intelligence/ComplexityAnalyzer.js';
+import { explainSymbol } from '../intelligence/ExplainSymbol.js';
 
 export interface CodebaseIndexerMcpServerOptions {
   indexDir?: string;
@@ -130,6 +141,364 @@ export function createCodebaseIndexerMcpServer(options: CodebaseIndexerMcpServer
         ...(options.githubToken ? { token: options.githubToken } : {})
       });
       return jsonResult(result);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_repository_map', {
+    description: 'Get compact repository map containing directory areas, file counts, and key symbols.',
+    inputSchema: { indexUid: z.string().optional() }
+  }, async ({ indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const targets = indexes.filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      const maps = targets.map(({ snapshot }) => buildRepositoryMap(snapshot));
+      return jsonResult(indexUid ? maps[0] : maps);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_symbol', {
+    description: 'Find matching symbol definitions across indexed workspaces.',
+    inputSchema: { name: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ name, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const matches = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => snapshot.symbols.filter((s) => s.name.toLowerCase().includes(name.toLowerCase())));
+      return jsonResult(matches);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_symbol', {
+    description: 'Get exact symbol by ID or name.',
+    inputSchema: { symbol: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ symbol, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const matches = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => snapshot.symbols.filter((s) => s.id === symbol || s.name === symbol));
+      return jsonResult(matches);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_references', {
+    description: 'Find all references to a given target symbol.',
+    inputSchema: { name: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ name, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const normalized = name.toLowerCase();
+      const references = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => snapshot.relations.filter((r) => r.targetName.toLowerCase() === normalized));
+      return jsonResult(references);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_callers', {
+    description: 'Find callers of a given symbol.',
+    inputSchema: { name: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ name, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const callers = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => {
+          const syms = new Set(snapshot.symbols.filter((s) => s.name.toLowerCase() === name.toLowerCase()).map((s) => s.id));
+          return snapshot.relations.filter((r) => r.kind === 'calls' && r.toSymbolId && syms.has(r.toSymbolId));
+        });
+      return jsonResult(callers);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_callees', {
+    description: 'Find callees invoked by a given symbol.',
+    inputSchema: { name: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ name, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const callees = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => {
+          const syms = new Set(snapshot.symbols.filter((s) => s.name.toLowerCase() === name.toLowerCase()).map((s) => s.id));
+          return snapshot.relations.filter((r) => r.kind === 'calls' && r.fromSymbolId && syms.has(r.fromSymbolId));
+        });
+      return jsonResult(callees);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_implementations', {
+    description: 'Find class/trait implementations or extensions for a symbol.',
+    inputSchema: { name: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ name, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const implementations = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) =>
+          snapshot.relations.filter((r) => (r.kind === 'implements' || r.kind === 'extends') && r.targetName.toLowerCase() === name.toLowerCase())
+        );
+      return jsonResult(implementations);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_dependencies', {
+    description: 'Get dependencies for a file or symbol.',
+    inputSchema: { query: z.string().min(1), depth: z.number().int().min(1).max(5).optional(), indexUid: z.string().optional() }
+  }, async ({ query, depth, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const deps = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => findDependencyRelations(snapshot, query, false, depth ?? 1));
+      return jsonResult(deps);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_dependents', {
+    description: 'Get reverse dependents for a file or symbol.',
+    inputSchema: { query: z.string().min(1), depth: z.number().int().min(1).max(5).optional(), indexUid: z.string().optional() }
+  }, async ({ query, depth, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const dependents = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => findDependencyRelations(snapshot, query, true, depth ?? 1));
+      return jsonResult(dependents);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_dependency_path', {
+    description: 'Find call or dependency path between two symbols.',
+    inputSchema: { from: z.string().min(1), to: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ from, to, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const target = indexes.find(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (!target) throw new Error('Index not found');
+      return jsonResult(findSymbolPath(target.snapshot, from, to));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_dependency_cycles', {
+    description: 'Detect dependency cycles in the symbol graph.',
+    inputSchema: { indexUid: z.string().optional() }
+  }, async ({ indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const cycles = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => findGraphCycles(snapshot));
+      return jsonResult(cycles);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('build_context', {
+    description: 'Build prompt context within a token/character budget for AI agents.',
+    inputSchema: { query: z.string().min(1), budget: z.number().int().optional(), indexUid: z.string().optional() }
+  }, async ({ query, budget, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const target = indexes.find(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (!target) throw new Error('Index not found');
+      const builder = new ContextBuilder();
+      const files = target.snapshot.files.slice(0, 10);
+      const context = builder.build(target.snapshot, query, files, { ...(budget ? { maxTokens: budget } : {}) });
+      return jsonResult(context);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('analyze_impact', {
+    description: 'Perform impact analysis for a symbol or file change.',
+    inputSchema: { target: z.string().min(1), maxDepth: z.number().int().min(1).max(10).optional(), indexUid: z.string().optional() }
+  }, async ({ target, maxDepth, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const loaded = indexes.find(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (!loaded) throw new Error('Index not found');
+      const impact = await analyzeImpact(loaded.snapshot, target, maxDepth ?? 5);
+      return jsonResult(impact);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_tests', {
+    description: 'Find test files and test symbols for a target symbol or file.',
+    inputSchema: { query: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ query, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const tests = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => findTests(snapshot, query));
+      return jsonResult(tests);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_affected_tests', {
+    description: 'Find affected test files for a list of changed files.',
+    inputSchema: { changedFiles: z.array(z.string()), indexUid: z.string().optional() }
+  }, async ({ changedFiles, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const tests = indexes
+        .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+        .flatMap(({ snapshot }) => findAffectedTests(snapshot, changedFiles));
+      return jsonResult(tests);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('find_api', {
+    description: 'Find specific API endpoint by route or handler name.',
+    inputSchema: { route: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ route, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const apis = (await Promise.all(
+        indexes
+          .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+          .map(({ snapshot }) => detectApiEndpoints(snapshot))
+      )).flat().filter((api) => api.path.toLowerCase().includes(route.toLowerCase()));
+      return jsonResult(apis);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('list_apis', {
+    description: 'List all detected API endpoints in the indexed workspace.',
+    inputSchema: { indexUid: z.string().optional() }
+  }, async ({ indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const apis = (await Promise.all(
+        indexes
+          .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+          .map(({ snapshot }) => detectApiEndpoints(snapshot))
+      )).flat();
+      return jsonResult(apis);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_database_schema', {
+    description: 'Get detected database schemas, tables, fields, and ORM models.',
+    inputSchema: { indexUid: z.string().optional() }
+  }, async ({ indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const schemas = (await Promise.all(
+        indexes
+          .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+          .map(({ snapshot }) => analyzeDatabaseSchema(snapshot))
+      )).flat();
+      return jsonResult(schemas);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_git_history', {
+    description: 'Get git commit history for an indexed workspace.',
+    inputSchema: { indexUid: z.string().optional(), limit: z.number().int().optional() }
+  }, async ({ indexUid, limit }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const target = indexes.find(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (!target) throw new Error('Index not found');
+      return jsonResult(await getGitHistory(target.snapshot.metadata.workspaceRoot, limit ?? 20));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_changes', {
+    description: 'Get recent uncommitted file changes for an indexed workspace.',
+    inputSchema: { indexUid: z.string().optional() }
+  }, async ({ indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const target = indexes.find(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (!target) throw new Error('Index not found');
+      return jsonResult(await getGitHistory(target.snapshot.metadata.workspaceRoot, 20));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_complexity', {
+    description: 'Get code complexity metrics for indexed files and symbols.',
+    inputSchema: { indexUid: z.string().optional() }
+  }, async ({ indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const metrics = (await Promise.all(
+        indexes
+          .filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid)
+          .map(({ snapshot }) => analyzeComplexity(snapshot))
+      )).flat();
+      return jsonResult(metrics);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('get_hotspots', {
+    description: 'Get high-risk / high-activity hotspots in the repository.',
+    inputSchema: { indexUid: z.string().optional() }
+  }, async ({ indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const target = indexes.find(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (!target) throw new Error('Index not found');
+      return jsonResult(await detectHotspots(target.snapshot.metadata.workspaceRoot));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('explain_symbol', {
+    description: 'Get deterministic structural explanation for a symbol.',
+    inputSchema: { symbol: z.string().min(1), indexUid: z.string().optional() }
+  }, async ({ symbol, indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const target = indexes.find(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (!target) throw new Error('Index not found');
+      return jsonResult(await explainSymbol(target.snapshot, symbol));
     } catch (error) {
       return errorResult(error);
     }

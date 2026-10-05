@@ -16,15 +16,6 @@ export interface ParsedFile {
 const languages = new Map<string, Promise<Language>>();
 let initialized: Promise<void> | undefined;
 const localGrammars = new Set(['dockerfile', 'elm', 'gitignore', 'make', 'markdown', 'ql', 'sql', 'yaml']);
-function runtimeRoot(): string {
-  const configuredRoot = process.env.CODEBASE_INDEXER_RUNTIME_ROOT;
-
-  if (configuredRoot) {
-    return path.resolve(configuredRoot);
-  }
-
-  return path.dirname(fileURLToPath(import.meta.url));
-}
 const grammars: Record<string, string> = {
   bash: 'bash',
   c: 'c',
@@ -144,21 +135,11 @@ async function getLanguage(grammar: string): Promise<Language | undefined> {
   if (!languagePromise) {
     languagePromise = (async () => {
       try {
-        const root = runtimeRoot();
-
         const wasmPath = localGrammars.has(grammar)
-          ? path.join(
-              root,
-              'grammars',
-              `${grammar}.wasm`
-            )
-          : path.join(
-              root,
-              'tree-sitter-wasms',
-              `tree-sitter-${grammar}.wasm`
-            );
+          ? runtimePath('grammars', `${grammar}.wasm`)
+          : runtimePath('tree-sitter-wasms', `tree-sitter-${grammar}.wasm`);
 
-        return await Language.load(path.resolve(wasmPath));
+        return await Language.load(wasmPath);
       } catch {
         return undefined as unknown as Language;
       }

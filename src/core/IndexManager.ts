@@ -16,10 +16,18 @@ import type { VectorRecord } from '../types/VectorRecord.js';
 import type { EmbeddingProvider } from '../embeddings/EmbeddingProvider.js';
 import { EmbeddingQueue } from '../embeddings/EmbeddingQueue.js';
 import { detectApiEndpoints, type ApiEndpoint } from '../intelligence/ApiDetector.js';
-import { findDependencyRelations, findSymbolPath, type GraphQueryOptions, type GraphPathResult } from '../intelligence/GraphQuery.js';
+import { findDependencyRelations, findSymbolPath, findGraphCycles, type GraphQueryOptions, type GraphPathResult, type GraphCycle } from '../intelligence/GraphQuery.js';
 import { buildRepositoryMap, type RepositoryMap } from '../intelligence/RepositoryMap.js';
 import { classifyQuery, type QueryIntent } from '../intelligence/QueryIntent.js';
 import { detectSensitiveRegions, type SensitiveRegion } from '../intelligence/SensitiveDetector.js';
+import { analyzeImpact, type ImpactAnalysisResult } from '../intelligence/ImpactAnalyzer.js';
+import { findTests, findAffectedTests, type TestMapping } from '../intelligence/TestAnalyzer.js';
+import { analyzeDatabaseSchema, type DatabaseModelInfo } from '../intelligence/DatabaseAnalyzer.js';
+import { getGitHistory, type GitHistoryResult } from '../intelligence/GitHistory.js';
+import { analyzeChangeCoupling, detectHotspots, type FileChangeCoupling, type Hotspot } from '../intelligence/ChangeAnalyzer.js';
+import { analyzeComplexity, type FileComplexity } from '../intelligence/ComplexityAnalyzer.js';
+import { detectDuplicates, type DuplicateMatch } from '../intelligence/DuplicateDetector.js';
+import { explainSymbol, type SymbolExplanation } from '../intelligence/ExplainSymbol.js';
 
 export interface IndexManagerOptions extends FileScannerOptions {
   workspacePath: string;
@@ -467,6 +475,54 @@ export class IndexManager {
 
   async findSensitiveRegions(): Promise<SensitiveRegion[]> {
     return detectSensitiveRegions(await this.read());
+  }
+
+  async analyzeImpact(target: string, maxDepth = 5): Promise<ImpactAnalysisResult> {
+    return analyzeImpact(await this.read(), target, maxDepth);
+  }
+
+  async findTests(query: string): Promise<TestMapping[]> {
+    return findTests(await this.read(), query);
+  }
+
+  async findAffectedTests(changedFiles: string[]): Promise<TestMapping[]> {
+    return findAffectedTests(await this.read(), changedFiles);
+  }
+
+  async getDatabaseSchema(): Promise<DatabaseModelInfo[]> {
+    return analyzeDatabaseSchema(await this.read());
+  }
+
+  async getGitHistory(limit = 20): Promise<GitHistoryResult> {
+    return getGitHistory(this.workspacePath, limit);
+  }
+
+  async getChanges(): Promise<GitHistoryResult> {
+    return getGitHistory(this.workspacePath, 20);
+  }
+
+  async getChangeCoupling(limit = 50): Promise<FileChangeCoupling[]> {
+    return analyzeChangeCoupling(this.workspacePath, limit);
+  }
+
+  async getHotspots(limit = 10): Promise<Hotspot[]> {
+    return detectHotspots(this.workspacePath, limit);
+  }
+
+  async getComplexity(): Promise<FileComplexity[]> {
+    return analyzeComplexity(await this.read());
+  }
+
+  async getDuplicates(minLines = 3): Promise<DuplicateMatch[]> {
+    return detectDuplicates(await this.read(), minLines);
+  }
+
+  async explainSymbol(symbolName: string): Promise<SymbolExplanation> {
+    return explainSymbol(await this.read(), symbolName);
+  }
+
+  async findDependencyCycles(): Promise<GraphCycle[]> {
+    return findGraphCycles(await this.read());
   }
 
   async semanticSearch(query: string, limit = 10): Promise<Array<{ file: FileRecord; chunk: CodeChunk; score: number }>> {

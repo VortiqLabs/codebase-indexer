@@ -16,7 +16,7 @@ const MAX_ARCHIVE_SIZE = 512 * 1024 * 1024;
 const FILES_PER_INDEX_PART = 100;
 const SOURCE_BYTES_PER_INDEX_PART = 32 * 1024 * 1024;
 const INDEX_PART_WORKER_PATH = pathToFileURL(
-  runtimePath('workers', 'GitHubIndexPartWorker.js')
+  runtimePath('src', 'github', 'GitHubIndexPartWorker.js')
 );
 const OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/u;
 const REPOSITORY_PATTERN = /^[A-Za-z0-9._-]{1,100}$/u;

@@ -28,7 +28,8 @@ const monacoAssetsPath = runtimePath(
 );
 
 const indexWorkerPath = runtimePath(
-  'workers',
+  'src',
+  'dashboard',
   'IndexSnapshotWorker.js'
 );
 export interface DashboardAppOptions {
