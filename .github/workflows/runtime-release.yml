@@ -35,13 +35,13 @@ jobs:
             runner: ubuntu-24.04-arm
             archive: tar.gz
 
-          # macOS x64 / Intel
+          # macOS Intel x64
           - platform: darwin
             arch: x64
             runner: macos-15-intel
             archive: tar.gz
 
-          # macOS ARM64 / Apple Silicon
+          # macOS Apple Silicon ARM64
           - platform: darwin
             arch: arm64
             runner: macos-14
@@ -158,7 +158,6 @@ jobs:
 
           echo ""
           echo "=== Runtime files ==="
-
           find runtime -maxdepth 2 -type f | sort
 
       # ======================================================================
@@ -249,10 +248,6 @@ jobs:
             test -w runtime/codebase-indexer
             test -x runtime/codebase-indexer
 
-            # --------------------------------------------------------------
-            # macOS
-            # --------------------------------------------------------------
-
             if [ "${{ matrix.platform }}" = "darwin" ]; then
 
               echo ""
@@ -262,10 +257,7 @@ jobs:
 
               echo ""
               echo "=== Architecture ==="
-
-              lipo \
-                -info \
-                runtime/codebase-indexer || true
+              lipo -info runtime/codebase-indexer || true
 
               echo ""
               echo "=== Removing existing macOS signature ==="
@@ -278,7 +270,6 @@ jobs:
 
               echo ""
               echo "=== Final permissions ==="
-
               ls -lah runtime/codebase-indexer
 
             fi
@@ -500,7 +491,7 @@ jobs:
           echo "================================================"
 
       # ======================================================================
-      # PACKAGE
+      # PACKAGE RUNTIME
       # ======================================================================
 
       - name: Package runtime
@@ -593,18 +584,35 @@ jobs:
           echo "=== Generating checksum ==="
 
           if [ "${{ matrix.archive }}" = "tar.gz" ]; then
-
-            shasum -a 256 \
-              "release/${NAME}.tar.gz" \
-              > "release/${NAME}.sha256"
-
+            FILE="release/${NAME}.tar.gz"
+            CHECKSUM="release/${NAME}.sha256"
+            FILENAME="${NAME}.tar.gz"
           else
-
-            shasum -a 256 \
-              "release/${NAME}.zip" \
-              > "release/${NAME}.sha256"
-
+            FILE="release/${NAME}.zip"
+            CHECKSUM="release/${NAME}.sha256"
+            FILENAME="${NAME}.zip"
           fi
+
+          node -e "
+            const fs = require('fs');
+            const crypto = require('crypto');
+
+            const file = process.argv[1];
+            const output = process.argv[2];
+            const filename = process.argv[3];
+
+            const hash = crypto
+              .createHash('sha256')
+              .update(fs.readFileSync(file))
+              .digest('hex');
+
+            fs.writeFileSync(
+              output,
+              hash + '  ' + filename + '\\n'
+            );
+
+            console.log(hash + '  ' + filename);
+          " "$FILE" "$CHECKSUM" "$FILENAME"
 
           echo ""
           echo "=== Final release files ==="
@@ -612,7 +620,7 @@ jobs:
 
           echo ""
           echo "=== Checksum ==="
-          cat "release/${NAME}.sha256"
+          cat "$CHECKSUM"
 
       # ======================================================================
       # UPLOAD ARTIFACT
@@ -625,7 +633,7 @@ jobs:
           path: release/*
 
   # ==========================================================================
-  # RELEASE
+  # PUBLISH GITHUB RELEASE
   # ==========================================================================
 
   release:
