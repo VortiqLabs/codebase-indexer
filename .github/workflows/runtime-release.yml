@@ -23,49 +23,37 @@ jobs:
 
       matrix:
         include:
-          # ------------------------------------------------------------------
           # Linux x64
-          # ------------------------------------------------------------------
           - platform: linux
             arch: x64
             runner: ubuntu-24.04
             archive: tar.gz
 
-          # ------------------------------------------------------------------
           # Linux ARM64
-          # ------------------------------------------------------------------
           - platform: linux
             arch: arm64
             runner: ubuntu-24.04-arm
             archive: tar.gz
 
-          # ------------------------------------------------------------------
           # macOS x64
-          # ------------------------------------------------------------------
           - platform: darwin
             arch: x64
             runner: macos-13
             archive: tar.gz
 
-          # ------------------------------------------------------------------
           # macOS ARM64
-          # ------------------------------------------------------------------
           - platform: darwin
             arch: arm64
             runner: macos-14
             archive: tar.gz
 
-          # ------------------------------------------------------------------
           # Windows x64
-          # ------------------------------------------------------------------
           - platform: win32
             arch: x64
             runner: windows-2025
             archive: zip
 
-          # ------------------------------------------------------------------
           # Windows ARM64
-          # ------------------------------------------------------------------
           - platform: win32
             arch: arm64
             runner: windows-11-arm
@@ -93,21 +81,21 @@ jobs:
           cache: npm
 
       # ======================================================================
-      # Dependencies
+      # Install dependencies
       # ======================================================================
 
       - name: Install dependencies
         run: npm ci
 
       # ======================================================================
-      # Normal application build
+      # Build application
       # ======================================================================
 
       - name: Build application
         run: npm run build
 
       # ======================================================================
-      # Bundle application for SEA
+      # Bundle SEA application
       # ======================================================================
 
       - name: Bundle SEA application
@@ -122,17 +110,13 @@ jobs:
           mkdir -p runtime
 
           echo ""
-          echo "Node:"
+          echo "=== Node ==="
           node --version
 
           echo ""
-          echo "esbuild:"
-          npx esbuild@${ESBUILD_VERSION} --version
+          echo "=== Bundling ==="
 
-          echo ""
-          echo "Bundling..."
-
-          npx esbuild@${ESBUILD_VERSION} \
+          npx --yes esbuild@${ESBUILD_VERSION} \
             dist/bin/codebase-indexer.js \
             --bundle \
             --platform=node \
@@ -165,7 +149,7 @@ jobs:
           cp -R dist/dashboard runtime/
 
           echo ""
-          echo "=== Runtime contents ==="
+          echo "=== Runtime files ==="
           find runtime -maxdepth 2 -type f | sort
 
       # ======================================================================
@@ -189,7 +173,7 @@ jobs:
           cat runtime/sea-config.json
 
       # ======================================================================
-      # SEA blob
+      # Create SEA blob
       # ======================================================================
 
       - name: Create SEA blob
@@ -220,61 +204,75 @@ jobs:
           echo "PREPARING NODE EXECUTABLE"
           echo "================================================"
 
-          cp "$(command -v node)" runtime/codebase-indexer
+          if [ "${{ matrix.platform }}" = "win32" ]; then
 
-          echo ""
-          echo "=== Node executable ==="
-          file runtime/codebase-indexer
+            echo "=== Preparing Windows executable ==="
 
-          echo ""
-          echo "=== Original permissions ==="
-          ls -lah runtime/codebase-indexer
-
-          echo ""
-          echo "=== Setting executable permissions ==="
-          chmod 755 runtime/codebase-indexer
-
-          echo ""
-          echo "=== Verifying permissions ==="
-          test -r runtime/codebase-indexer
-          test -w runtime/codebase-indexer
-          test -x runtime/codebase-indexer
-
-          ls -lah runtime/codebase-indexer
-
-          # ------------------------------------------------------------------
-          # macOS
-          # ------------------------------------------------------------------
-
-          if [ "${{ matrix.platform }}" = "darwin" ]; then
-            echo ""
-            echo "================================================"
-            echo "MACOS PREPARATION"
-            echo "================================================"
+            cp "$(command -v node)" \
+              runtime/codebase-indexer.exe
 
             echo ""
-            echo "=== Architecture ==="
-            lipo -info runtime/codebase-indexer || true
+            echo "=== Windows executable ==="
+            file runtime/codebase-indexer.exe
 
             echo ""
-            echo "=== Removing existing Apple signature ==="
+            echo "=== Windows permissions ==="
+            ls -lah runtime/codebase-indexer.exe
 
-            codesign \
-              --remove-signature \
-              runtime/codebase-indexer || true
+          else
 
-            echo ""
-            echo "=== Restoring writable permissions ==="
+            echo "=== Preparing Unix executable ==="
+
+            cp "$(command -v node)" \
+              runtime/codebase-indexer
 
             chmod 755 runtime/codebase-indexer
 
             echo ""
-            echo "=== Final permissions ==="
-            ls -lah runtime/codebase-indexer
+            echo "=== Unix executable ==="
+            file runtime/codebase-indexer
 
             echo ""
-            echo "=== Architecture after signature removal ==="
-            lipo -info runtime/codebase-indexer || true
+            echo "=== Unix permissions ==="
+            ls -lah runtime/codebase-indexer
+
+            test -r runtime/codebase-indexer
+            test -w runtime/codebase-indexer
+            test -x runtime/codebase-indexer
+
+            # --------------------------------------------------------------
+            # macOS preparation
+            # --------------------------------------------------------------
+
+            if [ "${{ matrix.platform }}" = "darwin" ]; then
+
+              echo ""
+              echo "================================================"
+              echo "MACOS PREPARATION"
+              echo "================================================"
+
+              echo ""
+              echo "=== Architecture ==="
+              lipo -info runtime/codebase-indexer || true
+
+              echo ""
+              echo "=== Removing existing macOS signature ==="
+
+              codesign \
+                --remove-signature \
+                runtime/codebase-indexer || true
+
+              echo ""
+              echo "=== Restoring permissions ==="
+
+              chmod 755 runtime/codebase-indexer
+
+              echo ""
+              echo "=== Final executable ==="
+              ls -lah runtime/codebase-indexer
+
+            fi
+
           fi
 
       # ======================================================================
@@ -290,37 +288,38 @@ jobs:
           echo "INJECTING SEA BLOB"
           echo "================================================"
 
-          chmod 755 runtime/codebase-indexer
+          if [ "${{ matrix.platform }}" = "win32" ]; then
 
-          echo ""
-          echo "=== Runtime executable ==="
-          file runtime/codebase-indexer
+            TARGET="runtime/codebase-indexer.exe"
 
-          echo ""
-          echo "=== Permissions ==="
-          ls -lah runtime/codebase-indexer
+            echo "=== Windows target ==="
+            file "$TARGET"
+            ls -lah "$TARGET"
 
-          echo ""
-          echo "=== Checking read/write/execute permissions ==="
-
-          test -r runtime/codebase-indexer
-          test -w runtime/codebase-indexer
-          test -x runtime/codebase-indexer
-
-          echo ""
-          echo "=== Installing postject ==="
-
-          npx --yes postject@${POSTJECT_VERSION} --version || true
-
-          echo ""
-          echo "=== Injecting ==="
-
-          if [ "${{ matrix.platform }}" = "darwin" ]; then
-
-            echo "=== macOS SEA injection ==="
+            echo ""
+            echo "=== Injecting Windows SEA blob ==="
 
             npx --yes postject@${POSTJECT_VERSION} \
-              runtime/codebase-indexer \
+              "$TARGET" \
+              NODE_SEA_BLOB \
+              runtime/sea-prep.blob \
+              --sentinel-fuse "${POSTJECT_FUSE}"
+
+          elif [ "${{ matrix.platform }}" = "darwin" ]; then
+
+            TARGET="runtime/codebase-indexer"
+
+            chmod 755 "$TARGET"
+
+            echo "=== macOS target ==="
+            file "$TARGET"
+            lipo -info "$TARGET" || true
+
+            echo ""
+            echo "=== Injecting macOS SEA blob ==="
+
+            npx --yes postject@${POSTJECT_VERSION} \
+              "$TARGET" \
               NODE_SEA_BLOB \
               runtime/sea-prep.blob \
               --sentinel-fuse "${POSTJECT_FUSE}" \
@@ -328,10 +327,18 @@ jobs:
 
           else
 
-            echo "=== Standard SEA injection ==="
+            TARGET="runtime/codebase-indexer"
+
+            chmod 755 "$TARGET"
+
+            echo "=== Linux target ==="
+            file "$TARGET"
+
+            echo ""
+            echo "=== Injecting Linux SEA blob ==="
 
             npx --yes postject@${POSTJECT_VERSION} \
-              runtime/codebase-indexer \
+              "$TARGET" \
               NODE_SEA_BLOB \
               runtime/sea-prep.blob \
               --sentinel-fuse "${POSTJECT_FUSE}"
@@ -339,10 +346,10 @@ jobs:
           fi
 
           echo ""
-          echo "=== Injection completed ==="
+          echo "=== SEA injection completed ==="
 
       # ======================================================================
-      # Sign macOS SEA executable
+      # Sign macOS executable
       # ======================================================================
 
       - name: Sign macOS SEA executable
@@ -420,7 +427,7 @@ jobs:
             runtime/codebase-indexer || true
 
       # ======================================================================
-      # Test runtime
+      # Test SEA runtime
       # ======================================================================
 
       - name: Test runtime
@@ -428,20 +435,37 @@ jobs:
         run: |
           set -e
 
-          chmod 755 runtime/codebase-indexer
-
           echo "================================================"
-          echo "RUNTIME HELP"
+          echo "TESTING SEA RUNTIME"
           echo "================================================"
 
-          ./runtime/codebase-indexer --help
+          if [ "${{ matrix.platform }}" = "win32" ]; then
 
-          echo ""
-          echo "================================================"
-          echo "RUNTIME STATUS"
-          echo "================================================"
+            TARGET="runtime/codebase-indexer.exe"
 
-          ./runtime/codebase-indexer status
+            echo ""
+            echo "=== Runtime help ==="
+            "$TARGET" --help
+
+            echo ""
+            echo "=== Runtime status ==="
+            "$TARGET" status
+
+          else
+
+            TARGET="runtime/codebase-indexer"
+
+            chmod 755 "$TARGET"
+
+            echo ""
+            echo "=== Runtime help ==="
+            "$TARGET" --help
+
+            echo ""
+            echo "=== Runtime status ==="
+            "$TARGET" status
+
+          fi
 
       # ======================================================================
       # Package runtime
@@ -477,7 +501,7 @@ jobs:
 
             7z a \
               "../release/${NAME}.zip" \
-              codebase-indexer \
+              codebase-indexer.exe \
               grammars \
               tree-sitter-wasms \
               workers \
@@ -518,7 +542,7 @@ jobs:
           path: release/*
 
   # ==========================================================================
-  # Publish Release
+  # Publish GitHub Release
   # ==========================================================================
 
   release:
@@ -528,6 +552,10 @@ jobs:
 
     steps:
 
+      # ======================================================================
+      # Download artifacts
+      # ======================================================================
+
       - name: Download runtime artifacts
         uses: actions/download-artifact@v8.0.0
         with:
@@ -536,7 +564,7 @@ jobs:
           merge-multiple: true
 
       # ======================================================================
-      # Combined checksums
+      # Generate combined checksums
       # ======================================================================
 
       - name: Generate combined checksums
@@ -552,10 +580,11 @@ jobs:
           cat *.sha256 | sort > SHA256SUMS
 
           echo ""
+          echo "=== SHA256SUMS ==="
           cat SHA256SUMS
 
       # ======================================================================
-      # GitHub Release
+      # Publish GitHub Release
       # ======================================================================
 
       - name: Publish GitHub Release
