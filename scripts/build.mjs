@@ -226,7 +226,7 @@ if (!existsSync(esbuild)) {
 }
 
 function esbuildRun(args) {
-  runNodeScript(
+  run(
     esbuild,
     args,
   );

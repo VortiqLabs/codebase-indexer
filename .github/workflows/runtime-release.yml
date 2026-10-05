@@ -23,43 +23,49 @@ jobs:
 
       matrix:
         include:
-          # ----------------------------------------------------------------
-          # Linux
-          # ----------------------------------------------------------------
-
+          # ------------------------------------------------------------------
+          # Linux x64
+          # ------------------------------------------------------------------
           - platform: linux
             arch: x64
             runner: ubuntu-24.04
             archive: tar.gz
 
+          # ------------------------------------------------------------------
+          # Linux ARM64
+          # ------------------------------------------------------------------
           - platform: linux
             arch: arm64
             runner: ubuntu-24.04-arm
             archive: tar.gz
 
-          # ----------------------------------------------------------------
-          # macOS
-          # ----------------------------------------------------------------
-
+          # ------------------------------------------------------------------
+          # macOS x64
+          # ------------------------------------------------------------------
           - platform: darwin
             arch: x64
             runner: macos-13
             archive: tar.gz
 
+          # ------------------------------------------------------------------
+          # macOS ARM64
+          # ------------------------------------------------------------------
           - platform: darwin
             arch: arm64
             runner: macos-14
             archive: tar.gz
 
-          # ----------------------------------------------------------------
-          # Windows
-          # ----------------------------------------------------------------
-
+          # ------------------------------------------------------------------
+          # Windows x64
+          # ------------------------------------------------------------------
           - platform: win32
             arch: x64
             runner: windows-2025
             archive: zip
 
+          # ------------------------------------------------------------------
+          # Windows ARM64
+          # ------------------------------------------------------------------
           - platform: win32
             arch: arm64
             runner: windows-11-arm
@@ -69,16 +75,16 @@ jobs:
 
     steps:
 
-      # ================================================================
+      # ======================================================================
       # Checkout
-      # ================================================================
+      # ======================================================================
 
       - name: Checkout
         uses: actions/checkout@v5.1.0
 
-      # ================================================================
+      # ======================================================================
       # Node
-      # ================================================================
+      # ======================================================================
 
       - name: Setup Node
         uses: actions/setup-node@v7.0.0
@@ -86,28 +92,45 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      # ================================================================
+      # ======================================================================
       # Dependencies
-      # ================================================================
+      # ======================================================================
 
       - name: Install dependencies
         run: npm ci
 
-      # ================================================================
-      # Application build
-      # ================================================================
+      # ======================================================================
+      # Normal application build
+      # ======================================================================
 
       - name: Build application
         run: npm run build
 
-      # ================================================================
-      # Bundle CLI for SEA
-      # ================================================================
+      # ======================================================================
+      # Bundle application for SEA
+      # ======================================================================
 
       - name: Bundle SEA application
         shell: bash
         run: |
+          set -e
+
+          echo "================================================"
+          echo "BUNDLING SEA APPLICATION"
+          echo "================================================"
+
           mkdir -p runtime
+
+          echo ""
+          echo "Node:"
+          node --version
+
+          echo ""
+          echo "esbuild:"
+          npx esbuild@${ESBUILD_VERSION} --version
+
+          echo ""
+          echo "Bundling..."
 
           npx esbuild@${ESBUILD_VERSION} \
             dist/bin/codebase-indexer.js \
@@ -117,25 +140,43 @@ jobs:
             --format=cjs \
             --outfile=runtime/codebase-indexer.cjs
 
-      # ================================================================
+          echo ""
+          echo "=== SEA bundle ==="
+          ls -lh runtime/codebase-indexer.cjs
+
+      # ======================================================================
       # Runtime assets
-      # ================================================================
+      # ======================================================================
 
       - name: Prepare runtime assets
         shell: bash
         run: |
+          set -e
+
+          echo "================================================"
+          echo "PREPARING RUNTIME ASSETS"
+          echo "================================================"
+
+          mkdir -p runtime
+
           cp -R dist/grammars runtime/
           cp -R dist/tree-sitter-wasms runtime/
           cp -R dist/workers runtime/
           cp -R dist/dashboard runtime/
 
-      # ================================================================
+          echo ""
+          echo "=== Runtime contents ==="
+          find runtime -maxdepth 2 -type f | sort
+
+      # ======================================================================
       # SEA configuration
-      # ================================================================
+      # ======================================================================
 
       - name: Create SEA config
         shell: bash
         run: |
+          set -e
+
           cat > runtime/sea-config.json <<'EOF'
           {
             "main": "runtime/codebase-indexer.cjs",
@@ -144,50 +185,141 @@ jobs:
           }
           EOF
 
-      # ================================================================
+          echo "=== SEA config ==="
+          cat runtime/sea-config.json
+
+      # ======================================================================
       # SEA blob
-      # ================================================================
+      # ======================================================================
 
       - name: Create SEA blob
         shell: bash
         run: |
+          set -e
+
+          echo "================================================"
+          echo "CREATING SEA BLOB"
+          echo "================================================"
+
           node --experimental-sea-config runtime/sea-config.json
 
-      # ================================================================
+          echo ""
+          echo "=== SEA blob ==="
+          ls -lh runtime/sea-prep.blob
+
+      # ======================================================================
       # Prepare Node executable
-      # ================================================================
+      # ======================================================================
 
       - name: Prepare Node executable
         shell: bash
         run: |
-          cp "$(command -v node)" runtime/codebase-indexer
-          chmod +x runtime/codebase-indexer || true
+          set -e
 
+          echo "================================================"
+          echo "PREPARING NODE EXECUTABLE"
+          echo "================================================"
+
+          cp "$(command -v node)" runtime/codebase-indexer
+
+          echo ""
           echo "=== Node executable ==="
-          file runtime/codebase-indexer || true
+          file runtime/codebase-indexer
+
+          echo ""
+          echo "=== Original permissions ==="
+          ls -lah runtime/codebase-indexer
+
+          echo ""
+          echo "=== Setting executable permissions ==="
+          chmod 755 runtime/codebase-indexer
+
+          echo ""
+          echo "=== Verifying permissions ==="
+          test -r runtime/codebase-indexer
+          test -w runtime/codebase-indexer
+          test -x runtime/codebase-indexer
+
+          ls -lah runtime/codebase-indexer
+
+          # ------------------------------------------------------------------
+          # macOS
+          # ------------------------------------------------------------------
 
           if [ "${{ matrix.platform }}" = "darwin" ]; then
-            echo "=== macOS architecture ==="
+            echo ""
+            echo "================================================"
+            echo "MACOS PREPARATION"
+            echo "================================================"
+
+            echo ""
+            echo "=== Architecture ==="
             lipo -info runtime/codebase-indexer || true
 
-            echo "=== Removing existing macOS signature ==="
-            codesign --remove-signature runtime/codebase-indexer
+            echo ""
+            echo "=== Removing existing Apple signature ==="
+
+            codesign \
+              --remove-signature \
+              runtime/codebase-indexer || true
+
+            echo ""
+            echo "=== Restoring writable permissions ==="
+
+            chmod 755 runtime/codebase-indexer
+
+            echo ""
+            echo "=== Final permissions ==="
+            ls -lah runtime/codebase-indexer
+
+            echo ""
+            echo "=== Architecture after signature removal ==="
+            lipo -info runtime/codebase-indexer || true
           fi
 
-      # ================================================================
+      # ======================================================================
       # Inject SEA blob
-      # ================================================================
+      # ======================================================================
 
       - name: Inject SEA blob
         shell: bash
         run: |
-          chmod +x runtime/codebase-indexer || true
+          set -e
+
+          echo "================================================"
+          echo "INJECTING SEA BLOB"
+          echo "================================================"
+
+          chmod 755 runtime/codebase-indexer
+
+          echo ""
+          echo "=== Runtime executable ==="
+          file runtime/codebase-indexer
+
+          echo ""
+          echo "=== Permissions ==="
+          ls -lah runtime/codebase-indexer
+
+          echo ""
+          echo "=== Checking read/write/execute permissions ==="
+
+          test -r runtime/codebase-indexer
+          test -w runtime/codebase-indexer
+          test -x runtime/codebase-indexer
+
+          echo ""
+          echo "=== Installing postject ==="
+
+          npx --yes postject@${POSTJECT_VERSION} --version || true
+
+          echo ""
+          echo "=== Injecting ==="
 
           if [ "${{ matrix.platform }}" = "darwin" ]; then
 
-            echo "=== Injecting SEA blob into Mach-O ==="
+            echo "=== macOS SEA injection ==="
 
-            npx postject@${POSTJECT_VERSION} \
+            npx --yes postject@${POSTJECT_VERSION} \
               runtime/codebase-indexer \
               NODE_SEA_BLOB \
               runtime/sea-prep.blob \
@@ -196,9 +328,9 @@ jobs:
 
           else
 
-            echo "=== Injecting SEA blob ==="
+            echo "=== Standard SEA injection ==="
 
-            npx postject@${POSTJECT_VERSION} \
+            npx --yes postject@${POSTJECT_VERSION} \
               runtime/codebase-indexer \
               NODE_SEA_BLOB \
               runtime/sea-prep.blob \
@@ -206,36 +338,59 @@ jobs:
 
           fi
 
-      # ================================================================
-      # Re-sign macOS binary
-      # ================================================================
+          echo ""
+          echo "=== Injection completed ==="
+
+      # ======================================================================
+      # Sign macOS SEA executable
+      # ======================================================================
 
       - name: Sign macOS SEA executable
         if: matrix.platform == 'darwin'
         shell: bash
         run: |
-          echo "=== Signing macOS SEA executable ==="
+          set -e
+
+          echo "================================================"
+          echo "SIGNING MACOS SEA EXECUTABLE"
+          echo "================================================"
+
+          chmod 755 runtime/codebase-indexer
+
+          echo ""
+          echo "=== Signing ==="
 
           codesign \
             --force \
             --sign - \
             runtime/codebase-indexer
 
-          echo "=== Verifying macOS signature ==="
+          echo ""
+          echo "=== Verifying signature ==="
 
           codesign \
             --verify \
             --verbose=4 \
             runtime/codebase-indexer
 
-      # ================================================================
-      # macOS diagnostics
-      # ================================================================
+          echo ""
+          echo "=== Signature information ==="
+
+          codesign \
+            -dv \
+            --verbose=4 \
+            runtime/codebase-indexer || true
+
+      # ======================================================================
+      # Inspect macOS SEA executable
+      # ======================================================================
 
       - name: Inspect macOS SEA executable
         if: matrix.platform == 'darwin'
         shell: bash
         run: |
+          set -e
+
           echo "================================================"
           echo "MACOS SEA BINARY"
           echo "================================================"
@@ -254,22 +409,26 @@ jobs:
 
           echo ""
           echo "=== SEA segment ==="
-          otool -l runtime/codebase-indexer | grep -A12 -B2 NODE_SEA || true
+          otool -l runtime/codebase-indexer \
+            | grep -A12 -B2 NODE_SEA || true
 
           echo ""
           echo "=== code signature ==="
-          codesign -dv \
+          codesign \
+            -dv \
             --verbose=4 \
             runtime/codebase-indexer || true
 
-      # ================================================================
-      # Runtime smoke test
-      # ================================================================
+      # ======================================================================
+      # Test runtime
+      # ======================================================================
 
       - name: Test runtime
         shell: bash
         run: |
-          chmod +x runtime/codebase-indexer || true
+          set -e
+
+          chmod 755 runtime/codebase-indexer
 
           echo "================================================"
           echo "RUNTIME HELP"
@@ -277,30 +436,31 @@ jobs:
 
           ./runtime/codebase-indexer --help
 
+          echo ""
           echo "================================================"
           echo "RUNTIME STATUS"
           echo "================================================"
 
           ./runtime/codebase-indexer status
 
-      # ================================================================
+      # ======================================================================
       # Package runtime
-      # ================================================================
+      # ======================================================================
 
       - name: Package runtime
         shell: bash
         run: |
+          set -e
+
           NAME="codebase-indexer-${{ matrix.platform }}-${{ matrix.arch }}"
+
+          echo "================================================"
+          echo "PACKAGING"
+          echo "================================================"
 
           mkdir -p release
 
-          # ------------------------------------------------------------
-          # Unix
-          # ------------------------------------------------------------
-
           if [ "${{ matrix.archive }}" = "tar.gz" ]; then
-
-            echo "Creating ${NAME}.tar.gz"
 
             tar -czf \
               "release/${NAME}.tar.gz" \
@@ -311,13 +471,7 @@ jobs:
               workers \
               dashboard
 
-          # ------------------------------------------------------------
-          # Windows
-          # ------------------------------------------------------------
-
           else
-
-            echo "Creating ${NAME}.zip"
 
             cd runtime
 
@@ -332,10 +486,6 @@ jobs:
             cd ..
 
           fi
-
-          # ------------------------------------------------------------
-          # SHA256
-          # ------------------------------------------------------------
 
           cd release
 
@@ -357,9 +507,9 @@ jobs:
           echo "=== Release files ==="
           ls -lh
 
-      # ================================================================
+      # ======================================================================
       # Upload artifact
-      # ================================================================
+      # ======================================================================
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v7.0.1
@@ -367,21 +517,16 @@ jobs:
           name: runtime-${{ matrix.platform }}-${{ matrix.arch }}
           path: release/*
 
-  # ====================================================================
-  # Release job
-  # ====================================================================
+  # ==========================================================================
+  # Publish Release
+  # ==========================================================================
 
   release:
     name: Publish GitHub Release
     needs: build
-
     runs-on: ubuntu-24.04
 
     steps:
-
-      # ================================================================
-      # Download artifacts
-      # ================================================================
 
       - name: Download runtime artifacts
         uses: actions/download-artifact@v8.0.0
@@ -390,29 +535,34 @@ jobs:
           pattern: runtime-*
           merge-multiple: true
 
-      # ================================================================
-      # Combined checksum
-      # ================================================================
+      # ======================================================================
+      # Combined checksums
+      # ======================================================================
 
       - name: Generate combined checksums
         working-directory: release
         shell: bash
         run: |
+          set -e
+
+          echo "================================================"
+          echo "GENERATING SHA256SUMS"
+          echo "================================================"
+
           cat *.sha256 | sort > SHA256SUMS
 
-          echo "=== SHA256SUMS ==="
+          echo ""
           cat SHA256SUMS
 
-      # ================================================================
-      # Publish release
-      # ================================================================
+      # ======================================================================
+      # GitHub Release
+      # ======================================================================
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
-
           files: |
             release/*.tar.gz
             release/*.zip
