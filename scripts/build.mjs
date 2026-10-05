@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as esbuild from "esbuild";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,49 +21,50 @@ function p(...parts) {
 }
 
 /**
- * Run a native executable using the current Node process environment.
- *
- * We intentionally avoid `.cmd` shims on Windows because they can fail
- * with EINVAL on Windows ARM64 GitHub runners.
- */
-function run(command, args = []) {
-  console.log(`\n> ${command} ${args.join(" ")}`);
-
-  execFileSync(command, args, {
-    cwd: root,
-    stdio: "inherit",
-    windowsHide: false,
-  });
-}
-
-/**
  * Run a JavaScript CLI through the current Node executable.
  *
+ * We use this only for TypeScript because `tsc` is a JavaScript CLI.
  * This avoids Windows `.cmd` wrappers entirely.
  */
 function runNodeScript(script, args = []) {
-  run(process.execPath, [script, ...args]);
+  console.log(`\n> ${process.execPath} ${script} ${args.join(" ")}`);
+
+  execFileSync(
+    process.execPath,
+    [script, ...args],
+    {
+      cwd: root,
+      stdio: "inherit",
+      windowsHide: false,
+    },
+  );
 }
 
 /**
  * Copy a file or directory.
  */
 function copy(source, destination) {
-  mkdirSync(path.dirname(destination), {
-    recursive: true,
-  });
+  mkdirSync(
+    path.dirname(destination),
+    {
+      recursive: true,
+    },
+  );
 
-  cpSync(source, destination, {
-    recursive: true,
-    force: true,
-  });
+  cpSync(
+    source,
+    destination,
+    {
+      recursive: true,
+      force: true,
+    },
+  );
 }
 
 /**
  * Resolve a dependency's executable JavaScript entry point.
  *
- * We do NOT use node_modules/.bin/*.cmd because Windows ARM64
- * runners can fail to spawn those wrappers with EINVAL.
+ * We use this for TypeScript only.
  */
 function dependencyBin(packageName, binPath) {
   return p(
@@ -124,22 +126,30 @@ console.log("\nPreparing runtime directories...");
 
 mkdirSync(
   p("dist", "grammars"),
-  { recursive: true },
+  {
+    recursive: true,
+  },
 );
 
 mkdirSync(
   p("dist", "tree-sitter-wasms"),
-  { recursive: true },
+  {
+    recursive: true,
+  },
 );
 
 mkdirSync(
   p("dist", "workers"),
-  { recursive: true },
+  {
+    recursive: true,
+  },
 );
 
 mkdirSync(
   p("dist", "dashboard"),
-  { recursive: true },
+  {
+    recursive: true,
+  },
 );
 
 /* -------------------------------------------------------------------------- */
@@ -214,22 +224,24 @@ copy(
 
 console.log("\nPreparing esbuild...");
 
-const esbuild = dependencyBin(
-  "esbuild",
-  path.join("bin", "esbuild"),
+console.log(
+  `esbuild version: ${esbuild.version}`,
 );
 
-if (!existsSync(esbuild)) {
-  throw new Error(
-    `esbuild executable not found: ${esbuild}`,
-  );
-}
-
-function esbuildRun(args) {
-  run(
-    esbuild,
-    args,
-  );
+/**
+ * Bundle using the esbuild JavaScript API.
+ *
+ * This is intentionally NOT executed through:
+ *
+ *   node_modules/.bin/esbuild
+ *   esbuild/bin/esbuild
+ *   npx esbuild
+ *
+ * The esbuild JS API handles the correct native binary for the
+ * current platform and architecture.
+ */
+async function esbuildRun(options) {
+  await esbuild.build(options);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -238,29 +250,33 @@ function esbuildRun(args) {
 
 console.log("\nBundling GitHub index worker...");
 
-esbuildRun([
-  "src/github/GitHubIndexPartWorker.ts",
-  "--bundle",
-  "--platform=node",
-  "--target=node24",
-  "--format=esm",
-  "--outfile=dist/workers/GitHubIndexPartWorker.js",
-]);
+await esbuildRun({
+  entryPoints: [
+    "src/github/GitHubIndexPartWorker.ts",
+  ],
+  bundle: true,
+  platform: "node",
+  target: "node24",
+  format: "esm",
+  outfile: "dist/workers/GitHubIndexPartWorker.js",
+});
 
 /* -------------------------------------------------------------------------- */
-/* Dashboard index worker                                                    */
+/* Dashboard index worker                                                     */
 /* -------------------------------------------------------------------------- */
 
 console.log("\nBundling dashboard index worker...");
 
-esbuildRun([
-  "src/dashboard/IndexSnapshotWorker.ts",
-  "--bundle",
-  "--platform=node",
-  "--target=node24",
-  "--format=esm",
-  "--outfile=dist/workers/IndexSnapshotWorker.js",
-]);
+await esbuildRun({
+  entryPoints: [
+    "src/dashboard/IndexSnapshotWorker.ts",
+  ],
+  bundle: true,
+  platform: "node",
+  target: "node24",
+  format: "esm",
+  outfile: "dist/workers/IndexSnapshotWorker.js",
+});
 
 /* -------------------------------------------------------------------------- */
 /* Dashboard graph client                                                     */
@@ -268,14 +284,16 @@ esbuildRun([
 
 console.log("\nBundling dashboard graph client...");
 
-esbuildRun([
-  "src/dashboard/graph-client.js",
-  "--bundle",
-  "--minify",
-  "--format=iife",
-  "--platform=browser",
-  "--outfile=dist/dashboard/graph-client.js",
-]);
+await esbuildRun({
+  entryPoints: [
+    "src/dashboard/graph-client.js",
+  ],
+  bundle: true,
+  minify: true,
+  format: "iife",
+  platform: "browser",
+  outfile: "dist/dashboard/graph-client.js",
+});
 
 /* -------------------------------------------------------------------------- */
 /* Monaco                                                                     */
