@@ -1,168 +1,142 @@
-# @vortiqlabs/codebase-indexer
+# ⚡ Codebase Indexer
 
-A high-performance, standalone, local-first TypeScript engine and interactive web dashboard for indexing codebases, parsing ASTs with Tree-sitter, resolving symbol relationships, performing lexical & semantic search, and visualizing code architecture.
+[![npm version](https://img.shields.io/npm/v/@vortiqlabs/codebase-indexer.svg?style=flat-square)](https://www.npmjs.com/package/@vortiqlabs/codebase-indexer)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Node.js Engine](https://img.shields.io/badge/node-%3E%3D20.0.0-blue.svg?style=flat-square)](package.json)
+[![Build & Test Status](https://img.shields.io/badge/tests-16%20passed-brightgreen.svg?style=flat-square)](package.json)
+[![MCP Protocol](https://img.shields.io/badge/MCP-v1.31.0-purple.svg?style=flat-square)](src/mcp/CodebaseIndexerMcpServer.ts)
 
----
+A production-quality **Local Code Intelligence Engine** for building structural, semantic, historical, and relational models of software repositories.
 
-## Key Features
-
-- ⚡ **Local-First & Fast**: Zero cloud dependency. Indexes are persisted locally in binary `.index` files using MessagePack and SHA-256 integrity verification.
-- 🌳 **Multi-Language AST Indexing**: Built-in Tree-sitter AST parser supporting **40+ programming languages** and file formats (TypeScript, JavaScript, Python, Rust, Go, Java, C/C++, C#, Kotlin, Swift, Scala, Elixir, Ruby, PHP, SQL, HTML, CSS, Dockerfile, YAML, TOML, JSON, and more).
-- 🎨 **Interactive Visual Dashboard & Graph**: Sleek Express dashboard featuring a full-screen interactive D3 graph of symbol relationships, Monaco Editor source viewer, dark/light/system theme switching, live progress streaming for GitHub imports, and architecture maps.
-- 📊 **System & Memory Safeguards**: Built-in bounded LRU caching, isolated worker threads, memory guards (4MB parse cap), and process memory statistics monitoring (`rss`, heap usage, cache size).
-- 🔍 **Advanced Lexical & Vector Search**: Perform instant term search or semantic vector search across local workspaces and GitHub repositories with language filtering.
-- 🛡️ **Security Findings Detection**: Automatic detection of sensitive regions (tokens, credentials, API keys) with redacted reporting.
-- 📦 **Export Capabilities**: Export workspace summaries and symbol definitions in **JSON** or **CSV** formats for reporting and external analysis.
-- 🤖 **Model Context Protocol (MCP) Server**: Expose workspace indexing, symbol analysis, and search tools directly to AI assistants over `stdio`.
+Runs 100% locally and offline. Exposes deterministic static analysis through **TypeScript API**, **CLI**, **MCP Server**, and an **Interactive Web Dashboard**.
 
 ---
 
-## Requirements
+## 🏛️ Logical Architecture
 
-- **Node.js**: `>= 20.0.0`
-- **npm** or **pnpm** or **yarn**
+```
+                                  CODEBASE INDEXER
+                                         │
+               ┌─────────────────────────┼─────────────────────────┐
+               │                         │                         │
+               ▼                         ▼                         ▼
+            Library                     CLI                       MCP
+            (Node.js)          (codebase-indexer)        (codebase-indexer-mcp)
+               │                         │                         │
+               └─────────────────────────┼─────────────────────────┘
+                                         ▼
+                               Standalone Executable
+                                         │
+                         ┌───────────────┼───────────────┐
+                         ▼               ▼               ▼
+                      VS Code        JetBrains          Zed
+                     extension      integration     integration
+```
 
 ---
 
-## Quick Start
+## ⚡ Core Features & Intelligence Capabilities
+
+- 🧬 **Symbol & Graph Intelligence**: Multi-language AST extraction via Tree-sitter across **40+ programming languages**.
+- 🕸️ **Call Graph & Dependencies**: Callers, callees, symbol paths, dependency graphs, and automated cycle detection (`find_dependency_cycles`).
+- 🌊 **Static Impact Analysis**: Predicts the ripple effect of symbol/file changes with `DIRECT`, `TRANSITIVE`, and `POSSIBLE` confidence ratings (`ImpactAnalyzer`).
+- 🧪 **Test Intelligence**: Automatically maps production code to tests and discovers affected test suites for changed files (`TestAnalyzer`).
+- 🗄️ **Database Intelligence**: Static schema and model extraction for Prisma (`schema.prisma`), SQL DDL migrations, and ORM entities (`DatabaseAnalyzer`).
+- 📜 **Git & Change Coupling**: Commit history, uncommitted status, co-change coupling percentages, and high-risk hotspot detection (`ChangeAnalyzer`).
+- 📊 **Code Quality & Complexity**: Cyclomatic complexity heuristics, LOC calculations, function/class sizes, and exact/structural duplicate detection (`ComplexityAnalyzer`, `DuplicateDetector`).
+- 🔍 **Hybrid Search & Context Builder**: Combines lexical and optional vector embeddings with token-budget-aware context snippet generation for AI agents (`ContextBuilder`).
+- 💡 **Deterministic Symbol Explanations**: Aggregates definition locations, callers, callees, references, export status, test coverage, APIs, and database models without LLM hallucinations (`ExplainSymbol`).
+- 🤖 **Model Context Protocol (MCP) Server**: Exposes 20+ specialized intelligence tools over stdio for AI assistants (Claude Desktop, Cursor, Windsurf, Zed).
+
+---
+
+## 📚 Documentation Index
+
+Detailed documentation for each engine component is available in [`docs/`](docs/):
+
+- 💻 **[CLI Documentation](docs/cli.md)**: Full command-line interface reference, subcommands, and flags.
+- 📦 **[Library API Documentation](docs/library-api.md)**: TypeScript / Node.js API reference for `CodebaseIndexer` and `IndexManager`.
+- 🤖 **[MCP Server Documentation](docs/mcp-server.md)**: Configuration guides and tool schemas for AI agents.
+- 🔬 **[Static Intelligence Features](docs/intelligence-features.md)**: In-depth explanations of Impact Analysis, Test Mapping, Database Schemas, Git Coupling, and Complexity metrics.
+- 📜 **[Changelog](CHANGELOG.md)**: Detailed version history and release notes.
+
+---
+
+## 🚀 Quick Start
 
 ### Installation
 
-```sh
+```bash
+# Global CLI installation
 npm install -g @vortiqlabs/codebase-indexer
-```
 
-Or run directly from source:
-
-```sh
-npm install
-npm run build
-```
-
-### CLI Usage
-
-```sh
-# Index a local workspace
-codebase-indexer index ./my-project
-
-# Index a GitHub repository directly from URL
-codebase-indexer index-github owner/repository --ref main
-
-# Launch the interactive web dashboard
-codebase-indexer dashboard --port 4173
-
-# Search indexed terms and symbols
-codebase-indexer search "authentication token" --path ./my-project
-
-# Find symbol definitions and usages
-codebase-indexer symbols AuthService --path ./my-project
-
-# Inspect binary index metadata
-codebase-indexer inspect ~/.cache/codebase-indexer/<uid>.index
-
-# Run watch mode for incremental re-indexing
-codebase-indexer watch ./my-project
+# Direct execution via npx
+npx @vortiqlabs/codebase-indexer status
 ```
 
 ---
 
-## Dashboard Capabilities
+### 1. Library API Usage (TypeScript)
 
-Launch the dashboard with `codebase-indexer dashboard` or `npm run build && node dist/bin/codebase-indexer.js dashboard`. Access `http://127.0.0.1:4173` in your browser.
-
-- 🌗 **Theme Switching**: Toggle between **Light**, **Dark**, and **System** themes with persistence in `localStorage`.
-- 🕸️ **Interactive D3 Symbol Graph**: Zoom, pan, filter, hover to isolate connections, and click any node to open its exact lines in a embedded **Monaco Code Editor**.
-- 📥 **GitHub Importer**: Enter any public or private GitHub repository URL (e.g. `https://github.com/owner/repo`). Features live SSE log streaming, file size filters, and custom ignore rules.
-- 💾 **Workspace Exports**: Download comprehensive **JSON** and **CSV** reports of indexed symbols and workspace composition.
-- 🖥️ **Memory & System Stats**: Realtime process RSS memory, heap usage, and index summary cache statistics.
-
----
-
-## Supported Languages
-
-The engine supports language detection and parsing across 40+ programming languages and formats:
-
-| Language | Extensions | Parser Grammar |
-| :--- | :--- | :--- |
-| **TypeScript / TSX** | `.ts`, `.tsx`, `.cts`, `.mts` | Tree-sitter TS / TSX |
-| **JavaScript / JSX** | `.js`, `.jsx`, `.mjs`, `.cjs` | Tree-sitter JavaScript |
-| **Python** | `.py`, `.pyw` | Tree-sitter Python |
-| **Rust** | `.rs` | Tree-sitter Rust |
-| **Go** | `.go`, `go.mod` | Tree-sitter Go |
-| **Java** | `.java` | Tree-sitter Java |
-| **C / C++** | `.c`, `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` | Tree-sitter C / C++ |
-| **C#** | `.cs` | Tree-sitter C# |
-| **Kotlin** | `.kt`, `.kts` | Tree-sitter Kotlin |
-| **Swift** | `.swift` | Tree-sitter Swift |
-| **Scala** | `.scala`, `.sc` | Tree-sitter Scala |
-| **Ruby** | `.rb` | Tree-sitter Ruby |
-| **PHP** | `.php` | Tree-sitter PHP |
-| **Elixir** | `.ex`, `.exs` | Tree-sitter Elixir |
-| **Elm** | `.elm` | Bundled WASM |
-| **Dart** | `.dart` | Tree-sitter Dart |
-| **HTML / Vue** | `.html`, `.htm`, `.vue` | Tree-sitter HTML / Vue |
-| **CSS / SCSS / SASS / LESS** | `.css`, `.scss`, `.sass`, `.less` | Tree-sitter CSS |
-| **SQL** | `.sql` | Bundled WASM |
-| **Dockerfile** | `Dockerfile`, `Containerfile` | Bundled WASM |
-| **Makefile** | `Makefile`, `CMakeLists.txt` | Bundled WASM |
-| **Markdown** | `.md`, `.mdx` | Bundled WASM |
-| **YAML / TOML / JSON** | `.yaml`, `.yml`, `.toml`, `.json`, `.json5` | Tree-sitter / WASM |
-| **Shell / Bash** | `.sh`, `.bash`, `.zsh` | Tree-sitter Bash |
-| **And more** | Clojure, Haskell, Perl, R, Julia, Protobuf, GraphQL, Solidity, TLA+, SystemRDL | Specialized / Fallback |
-
-Files without a specific Tree-sitter grammar automatically fall back to fast lexical scanning and semantic chunking.
-
----
-
-## Memory Optimization & Safeguards
-
-Designed to handle large multi-repository codebases without memory exhaustion:
-
-- 🛡️ **Parse Buffer Caps**: AST parsing is capped at 4MB per file to prevent single huge files from consuming heap space.
-- ⚙️ **Resource-Bounded Workers**: Index workers run with isolated heap limits (`1024MB` max old generation).
-- 🧠 **LRU Index Summary Cache**: Dashboard uses an LRU cache limited to 100 active index summaries with automatic eviction.
-- 🧹 **Automatic AST Release**: Web-tree-sitter trees and parser instances are explicitly garbage-collected immediately after extraction.
-
----
-
-## API Usage
-
-```ts
+```typescript
 import { CodebaseIndexer } from '@vortiqlabs/codebase-indexer';
 
 const indexer = new CodebaseIndexer({
-  workspacePath: '/path/to/project',
-  indexDir: '~/.cache/codebase-indexer'
+  workspacePath: '/path/to/repository'
 });
 
 await indexer.initialize();
+await indexer.index();
 
-// Build / update index
-const result = await indexer.index();
-console.log(`Indexed ${result.fileCount} files and ${result.symbolCount} symbols.`);
+// 1. Static Impact Analysis
+const impact = await indexer.analyzeImpact('UserService');
+console.log(`Direct Dependents: ${impact.directDependents.length}`);
 
-// Perform lexical search
-const searchResults = await indexer.search('authMiddleware');
+// 2. Test Intelligence
+const tests = await indexer.findTests('UserService');
+console.log(`Associated Tests: ${tests.map((t) => t.testFile).join(', ')}`);
 
-// Find symbol
-const symbols = await indexer.findSymbol('UserService');
-
-// Get context prompt for LLMs
-const context = await indexer.getContext('how is authentication implemented?');
+// 3. Deterministic Symbol Explanation
+const explanation = await indexer.explainSymbol('UserService');
+console.log(explanation);
 ```
 
 ---
 
-## MCP Server
+### 2. CLI Usage
 
-Expose indexer capabilities to Claude Desktop or any Model Context Protocol client:
+```bash
+# Index a local workspace
+codebase-indexer index ./my-repo
+
+# Generate compact repository map
+codebase-indexer map ./my-repo
+
+# Analyze impact of changing a symbol
+codebase-indexer impact UserService
+
+# Detect database schemas (Prisma, SQL, ORM)
+codebase-indexer database
+
+# View high-risk change hotspots
+codebase-indexer hotspots
+
+# Launch interactive web dashboard
+codebase-indexer dashboard --port 4173
+```
+
+---
+
+### 3. MCP Server Configuration (Claude Desktop / Cursor)
+
+Add to your `claude_desktop_config.json` or Cursor MCP settings:
 
 ```json
 {
   "mcpServers": {
     "codebase-indexer": {
-      "command": "codebase-indexer",
-      "args": ["mcp"],
+      "command": "npx",
+      "args": ["-y", "@vortiqlabs/codebase-indexer", "mcp"],
       "env": {
         "CODEBASE_INDEX_DIR": "/home/user/.cache/codebase-indexer"
       }
@@ -171,16 +145,27 @@ Expose indexer capabilities to Claude Desktop or any Model Context Protocol clie
 }
 ```
 
-Exposed MCP Tools:
-- `list_indexes`
-- `search_code`
-- `read_indexed_file`
-- `get_symbol_relations`
-- `index_local_workspace`
-- `index_github_repository`
+---
+
+## 📊 Supported Languages
+
+| Language | Extensions | Grammar Parser |
+| :--- | :--- | :--- |
+| **TypeScript / TSX** | `.ts`, `.tsx`, `.cts`, `.mts` | Tree-sitter TS / TSX |
+| **JavaScript / JSX** | `.js`, `.jsx`, `.mjs`, `.cjs` | Tree-sitter JS |
+| **Python** | `.py`, `.pyw` | Tree-sitter Python |
+| **Rust** | `.rs` | Tree-sitter Rust |
+| **Go** | `.go`, `go.mod` | Tree-sitter Go |
+| **Java** | `.java` | Tree-sitter Java |
+| **C / C++** | `.c`, `.cpp`, `.cc`, `.h`, `.hpp` | Tree-sitter C / C++ |
+| **C#** | `.cs` | Tree-sitter C# |
+| **Kotlin / Swift / Scala** | `.kt`, `.swift`, `.scala` | Tree-sitter |
+| **SQL / Prisma** | `.sql`, `.prisma` | WASM / Custom DDL |
+| **Dockerfile / Makefile** | `Dockerfile`, `Makefile` | WASM |
+| **Markdown / YAML / JSON** | `.md`, `.yaml`, `.json` | WASM / Tree-sitter |
 
 ---
 
-## License
+## 📄 License
 
 [MIT](LICENSE)
