@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { runtimePath } from '../runtime/runtime-paths.js';
 import { Language, Parser, type Node as SyntaxNode, type Tree } from 'web-tree-sitter';
 import type { CodeChunk } from '../types/CodeChunk.js';
@@ -16,15 +15,6 @@ export interface ParsedFile {
 const languages = new Map<string, Promise<Language>>();
 let initialized: Promise<void> | undefined;
 const localGrammars = new Set(['dockerfile', 'elm', 'gitignore', 'make', 'markdown', 'ql', 'sql', 'yaml']);
-function runtimeRoot(): string {
-  const configuredRoot = process.env.CODEBASE_INDEXER_RUNTIME_ROOT;
-
-  if (configuredRoot) {
-    return path.resolve(configuredRoot);
-  }
-
-  return path.dirname(fileURLToPath(import.meta.url));
-}
 const grammars: Record<string, string> = {
   bash: 'bash',
   c: 'c',
@@ -144,16 +134,9 @@ async function getLanguage(grammar: string): Promise<Language | undefined> {
   if (!languagePromise) {
     languagePromise = (async () => {
       try {
-        const root = runtimeRoot();
-
         const wasmPath = localGrammars.has(grammar)
-          ? path.join(
-              root,
-              'grammars',
-              `${grammar}.wasm`
-            )
-          : path.join(
-              root,
+          ? runtimePath('grammars', `${grammar}.wasm`)
+          : runtimePath(
               'tree-sitter-wasms',
               `tree-sitter-${grammar}.wasm`
             );

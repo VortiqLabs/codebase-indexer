@@ -25,7 +25,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && mkdir -p dist/grammars dist/tree-sitter-wasms dist/workers dist/dashboard && cp -R src/parser/grammars/. dist/grammars/ && cp -R node_modules/tree-sitter-wasms/out/. dist/tree-sitter-wasms/ && cp dist/src/github/GitHubIndexPartWorker.js dist/workers/ && cp dist/src/dashboard/IndexSnapshotWorker.js dist/workers/ && esbuild src/dashboard/graph-client.js --bundle --minify --format=iife --platform=browser --outfile=dist/dashboard/graph-client.js && cp -R node_modules/monaco-editor/min/vs dist/dashboard/monaco",
+   "build": "rm -rf dist && tsc -p tsconfig.json && mkdir -p dist/grammars dist/tree-sitter-wasms dist/workers dist/dashboard && cp -R src/parser/grammars/. dist/grammars/ && cp -R node_modules/tree-sitter-wasms/out/. dist/tree-sitter-wasms/ && cp node_modules/web-tree-sitter/tree-sitter.wasm dist/workers/tree-sitter.wasm && esbuild src/github/GitHubIndexPartWorker.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/workers/GitHubIndexPartWorker.js && esbuild src/dashboard/IndexSnapshotWorker.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/workers/IndexSnapshotWorker.js && esbuild src/dashboard/graph-client.js --bundle --minify --format=iife --platform=browser --outfile=dist/dashboard/graph-client.js && mkdir -p dist/dashboard/monaco && cp -R node_modules/monaco-editor/min/vs dist/dashboard/monaco",
     "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "dependencies": {
