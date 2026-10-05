@@ -20,8 +20,13 @@ jobs:
 
     strategy:
       fail-fast: false
+
       matrix:
         include:
+          # ----------------------------------------------------------------
+          # Linux
+          # ----------------------------------------------------------------
+
           - platform: linux
             arch: x64
             runner: ubuntu-24.04
@@ -32,6 +37,10 @@ jobs:
             runner: ubuntu-24.04-arm
             archive: tar.gz
 
+          # ----------------------------------------------------------------
+          # macOS
+          # ----------------------------------------------------------------
+
           - platform: darwin
             arch: x64
             runner: macos-13
@@ -41,6 +50,10 @@ jobs:
             arch: arm64
             runner: macos-14
             archive: tar.gz
+
+          # ----------------------------------------------------------------
+          # Windows
+          # ----------------------------------------------------------------
 
           - platform: win32
             arch: x64
@@ -55,8 +68,17 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     steps:
+
+      # ================================================================
+      # Checkout
+      # ================================================================
+
       - name: Checkout
         uses: actions/checkout@v5.1.0
+
+      # ================================================================
+      # Node
+      # ================================================================
 
       - name: Setup Node
         uses: actions/setup-node@v7.0.0
@@ -64,11 +86,23 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
+      # ================================================================
+      # Dependencies
+      # ================================================================
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Build TypeScript
+      # ================================================================
+      # Application build
+      # ================================================================
+
+      - name: Build application
         run: npm run build
+
+      # ================================================================
+      # Bundle CLI for SEA
+      # ================================================================
 
       - name: Bundle SEA application
         shell: bash
@@ -83,6 +117,10 @@ jobs:
             --format=cjs \
             --outfile=runtime/codebase-indexer.cjs
 
+      # ================================================================
+      # Runtime assets
+      # ================================================================
+
       - name: Prepare runtime assets
         shell: bash
         run: |
@@ -90,6 +128,10 @@ jobs:
           cp -R dist/tree-sitter-wasms runtime/
           cp -R dist/workers runtime/
           cp -R dist/dashboard runtime/
+
+      # ================================================================
+      # SEA configuration
+      # ================================================================
 
       - name: Create SEA config
         shell: bash
@@ -102,83 +144,148 @@ jobs:
           }
           EOF
 
+      # ================================================================
+      # SEA blob
+      # ================================================================
+
       - name: Create SEA blob
         shell: bash
         run: |
           node --experimental-sea-config runtime/sea-config.json
 
+      # ================================================================
+      # Prepare Node executable
+      # ================================================================
+
       - name: Prepare Node executable
         shell: bash
         run: |
           cp "$(command -v node)" runtime/codebase-indexer
+          chmod +x runtime/codebase-indexer || true
+
+          echo "=== Node executable ==="
+          file runtime/codebase-indexer || true
 
           if [ "${{ matrix.platform }}" = "darwin" ]; then
-            chmod +x runtime/codebase-indexer
-
-            echo "Node executable:"
-            file runtime/codebase-indexer
-
-            echo "Node architecture:"
+            echo "=== macOS architecture ==="
             lipo -info runtime/codebase-indexer || true
+
+            echo "=== Removing existing macOS signature ==="
+            codesign --remove-signature runtime/codebase-indexer
           fi
+
+      # ================================================================
+      # Inject SEA blob
+      # ================================================================
 
       - name: Inject SEA blob
         shell: bash
         run: |
           chmod +x runtime/codebase-indexer || true
 
-          npx postject@${POSTJECT_VERSION} \
-            runtime/codebase-indexer \
-            NODE_SEA_BLOB \
-            runtime/sea-prep.blob \
-            --sentinel-fuse "${POSTJECT_FUSE}"
+          if [ "${{ matrix.platform }}" = "darwin" ]; then
 
-      - name: Re-sign macOS SEA executable
+            echo "=== Injecting SEA blob into Mach-O ==="
+
+            npx postject@${POSTJECT_VERSION} \
+              runtime/codebase-indexer \
+              NODE_SEA_BLOB \
+              runtime/sea-prep.blob \
+              --sentinel-fuse "${POSTJECT_FUSE}" \
+              --macho-segment-name NODE_SEA
+
+          else
+
+            echo "=== Injecting SEA blob ==="
+
+            npx postject@${POSTJECT_VERSION} \
+              runtime/codebase-indexer \
+              NODE_SEA_BLOB \
+              runtime/sea-prep.blob \
+              --sentinel-fuse "${POSTJECT_FUSE}"
+
+          fi
+
+      # ================================================================
+      # Re-sign macOS binary
+      # ================================================================
+
+      - name: Sign macOS SEA executable
         if: matrix.platform == 'darwin'
         shell: bash
         run: |
-          echo "Re-signing macOS SEA executable..."
+          echo "=== Signing macOS SEA executable ==="
 
           codesign \
             --force \
-            --deep \
             --sign - \
             runtime/codebase-indexer
 
-          echo "Verifying signature..."
+          echo "=== Verifying macOS signature ==="
+
           codesign \
             --verify \
             --verbose=4 \
             runtime/codebase-indexer
 
+      # ================================================================
+      # macOS diagnostics
+      # ================================================================
+
       - name: Inspect macOS SEA executable
         if: matrix.platform == 'darwin'
         shell: bash
         run: |
-          echo "=== File ==="
+          echo "================================================"
+          echo "MACOS SEA BINARY"
+          echo "================================================"
+
+          echo ""
+          echo "=== file ==="
           file runtime/codebase-indexer
 
-          echo "=== Architecture ==="
+          echo ""
+          echo "=== architecture ==="
           lipo -info runtime/codebase-indexer || true
 
-          echo "=== Mach-O ==="
+          echo ""
+          echo "=== Mach-O header ==="
           otool -hv runtime/codebase-indexer || true
 
-          echo "=== Code Signature ==="
+          echo ""
+          echo "=== SEA segment ==="
+          otool -l runtime/codebase-indexer | grep -A12 -B2 NODE_SEA || true
+
+          echo ""
+          echo "=== code signature ==="
           codesign -dv \
             --verbose=4 \
             runtime/codebase-indexer || true
+
+      # ================================================================
+      # Runtime smoke test
+      # ================================================================
 
       - name: Test runtime
         shell: bash
         run: |
           chmod +x runtime/codebase-indexer || true
 
-          echo "=== Runtime help ==="
+          echo "================================================"
+          echo "RUNTIME HELP"
+          echo "================================================"
+
           ./runtime/codebase-indexer --help
 
-          echo "=== Runtime status ==="
+          echo "================================================"
+          echo "RUNTIME STATUS"
+          echo "================================================"
+
           ./runtime/codebase-indexer status
+
+      # ================================================================
+      # Package runtime
+      # ================================================================
 
       - name: Package runtime
         shell: bash
@@ -187,15 +294,31 @@ jobs:
 
           mkdir -p release
 
+          # ------------------------------------------------------------
+          # Unix
+          # ------------------------------------------------------------
+
           if [ "${{ matrix.archive }}" = "tar.gz" ]; then
-            tar -czf "release/${NAME}.tar.gz" \
+
+            echo "Creating ${NAME}.tar.gz"
+
+            tar -czf \
+              "release/${NAME}.tar.gz" \
               -C runtime \
               codebase-indexer \
               grammars \
               tree-sitter-wasms \
               workers \
               dashboard
+
+          # ------------------------------------------------------------
+          # Windows
+          # ------------------------------------------------------------
+
           else
+
+            echo "Creating ${NAME}.zip"
+
             cd runtime
 
             7z a \
@@ -207,15 +330,36 @@ jobs:
               dashboard
 
             cd ..
+
           fi
+
+          # ------------------------------------------------------------
+          # SHA256
+          # ------------------------------------------------------------
 
           cd release
 
           if [ "${{ matrix.archive }}" = "tar.gz" ]; then
-            shasum -a 256 "${NAME}.tar.gz" > "${NAME}.sha256"
+
+            shasum -a 256 \
+              "${NAME}.tar.gz" \
+              > "${NAME}.sha256"
+
           else
-            shasum -a 256 "${NAME}.zip" > "${NAME}.sha256"
+
+            shasum -a 256 \
+              "${NAME}.zip" \
+              > "${NAME}.sha256"
+
           fi
+
+          echo ""
+          echo "=== Release files ==="
+          ls -lh
+
+      # ================================================================
+      # Upload artifact
+      # ================================================================
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v7.0.1
@@ -223,12 +367,22 @@ jobs:
           name: runtime-${{ matrix.platform }}-${{ matrix.arch }}
           path: release/*
 
+  # ====================================================================
+  # Release job
+  # ====================================================================
+
   release:
     name: Publish GitHub Release
     needs: build
+
     runs-on: ubuntu-24.04
 
     steps:
+
+      # ================================================================
+      # Download artifacts
+      # ================================================================
+
       - name: Download runtime artifacts
         uses: actions/download-artifact@v8.0.0
         with:
@@ -236,17 +390,29 @@ jobs:
           pattern: runtime-*
           merge-multiple: true
 
+      # ================================================================
+      # Combined checksum
+      # ================================================================
+
       - name: Generate combined checksums
         working-directory: release
         shell: bash
         run: |
           cat *.sha256 | sort > SHA256SUMS
 
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS
+
+      # ================================================================
+      # Publish release
+      # ================================================================
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
+
           files: |
             release/*.tar.gz
             release/*.zip
