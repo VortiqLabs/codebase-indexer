@@ -112,6 +112,16 @@ jobs:
         run: |
           cp "$(command -v node)" runtime/codebase-indexer
 
+          if [ "${{ matrix.platform }}" = "darwin" ]; then
+            chmod +x runtime/codebase-indexer
+
+            echo "Node executable:"
+            file runtime/codebase-indexer
+
+            echo "Node architecture:"
+            lipo -info runtime/codebase-indexer || true
+          fi
+
       - name: Inject SEA blob
         shell: bash
         run: |
@@ -123,17 +133,56 @@ jobs:
             runtime/sea-prep.blob \
             --sentinel-fuse "${POSTJECT_FUSE}"
 
+      - name: Re-sign macOS SEA executable
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          echo "Re-signing macOS SEA executable..."
+
+          codesign \
+            --force \
+            --deep \
+            --sign - \
+            runtime/codebase-indexer
+
+          echo "Verifying signature..."
+          codesign \
+            --verify \
+            --verbose=4 \
+            runtime/codebase-indexer
+
+      - name: Inspect macOS SEA executable
+        if: matrix.platform == 'darwin'
+        shell: bash
+        run: |
+          echo "=== File ==="
+          file runtime/codebase-indexer
+
+          echo "=== Architecture ==="
+          lipo -info runtime/codebase-indexer || true
+
+          echo "=== Mach-O ==="
+          otool -hv runtime/codebase-indexer || true
+
+          echo "=== Code Signature ==="
+          codesign -dv \
+            --verbose=4 \
+            runtime/codebase-indexer || true
+
       - name: Test runtime
         shell: bash
         run: |
           chmod +x runtime/codebase-indexer || true
+
+          echo "=== Runtime help ==="
           ./runtime/codebase-indexer --help
+
+          echo "=== Runtime status ==="
           ./runtime/codebase-indexer status
 
       - name: Package runtime
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           NAME="codebase-indexer-${{ matrix.platform }}-${{ matrix.arch }}"
 
           mkdir -p release
@@ -148,21 +197,24 @@ jobs:
               dashboard
           else
             cd runtime
-            7z a "../release/${NAME}.zip" \
+
+            7z a \
+              "../release/${NAME}.zip" \
               codebase-indexer \
               grammars \
               tree-sitter-wasms \
               workers \
               dashboard
+
             cd ..
           fi
 
           cd release
 
           if [ "${{ matrix.archive }}" = "tar.gz" ]; then
-            sha256sum "${NAME}.tar.gz" > "${NAME}.sha256"
+            shasum -a 256 "${NAME}.tar.gz" > "${NAME}.sha256"
           else
-            sha256sum "${NAME}.zip" > "${NAME}.sha256"
+            shasum -a 256 "${NAME}.zip" > "${NAME}.sha256"
           fi
 
       - name: Upload runtime artifact
@@ -190,7 +242,7 @@ jobs:
         run: |
           cat *.sha256 | sort > SHA256SUMS
 
-      - name: Publish release assets
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
