@@ -49,7 +49,5 @@ export { EmbeddingGemmaOnnxProvider } from './embeddings/EmbeddingGemmaOnnxProvi
 export type { EmbeddingGemmaOnnxProviderOptions, EmbeddingGemmaOnnxRuntime, EmbeddingGemmaOnnxDtype } from './embeddings/EmbeddingGemmaOnnxProvider.js';
 
 export { TreeSitterParser } from './parser/TreeSitterParser.js';
-export { PersistentQueryEngine } from './storage/PersistentQueryEngine.js';
-export { StagingDatabase } from './storage/StagingDatabase.js';
 export { detectApiEndpoints } from './intelligence/ApiDetector.js';
 export { detectSensitiveRegions } from './intelligence/SensitiveDetector.js';

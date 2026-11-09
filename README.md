@@ -129,39 +129,79 @@ Designed to handle large multi-repository codebases without memory exhaustion:
 
 ---
 
-## API Usage
+## JavaScript / TypeScript SDK
+
+The package exposes a stable, application-facing SDK. `createCodebase()` initializes the indexer for you, so consumers can use it immediately without manually constructing internal managers.
 
 ```ts
-import { CodebaseIndexer } from '@vortiqlabs/codebase-indexer';
+import { createCodebase } from '@vortiqlabs/codebase-indexer';
 
-const indexer = new CodebaseIndexer({
-  workspacePath: '/path/to/project',
-  indexDir: '~/.cache/codebase-indexer'
+const codebase = await createCodebase({
+  workspacePath: './my-project',
+  // indexDir: './.codebase-index', // optional; defaults to the user cache directory
 });
 
-await indexer.initialize();
+try {
+  // Create or incrementally update the index
+  const update = await codebase.index(false, (progress) => {
+    console.log(progress.stage, progress.message);
+  });
 
-// Build / update index
-const result = await indexer.index();
-console.log(`Indexed ${result.fileCount} files and ${result.symbolCount} symbols.`);
+  // Search and inspect source records
+  const matches = await codebase.search('authentication middleware');
+  const file = await codebase.getFile('src/auth.ts');
+  const chunks = await codebase.getChunks({ query: 'token', limit: 20 });
 
-// Perform lexical search
-const searchResults = await indexer.search('authMiddleware');
+  // Code intelligence
+  const definitions = await codebase.findSymbol('authenticate');
+  const references = await codebase.findReferences('authenticate');
+  const callers = await codebase.findCallers('authenticate');
+  const dependencies = await codebase.findDependencies('src/auth.ts', 2);
+  const impact = await codebase.analyzeChangeImpact('authenticate');
+  const architecture = await codebase.analyzeArchitecture();
 
-// Find symbol
-const symbols = await indexer.findSymbol('UserService');
-
-// Get graph-aware context prompt for LLMs
-const context = await indexer.getContext('how is authentication implemented?', {
-  maxFiles: 8,
-  maxTokens: 6000,
-  includeRelatedFiles: true
-});
-
-// Inspect relative-import architecture and circular dependencies
-const architecture = await indexer.analyzeArchitecture();
-console.log(architecture.cycles);
+  // LLM-ready context and repository metadata
+  const context = await codebase.getContext('where is authentication validated?', {
+    maxFiles: 8,
+    maxTokens: 6000,
+  });
+  const stats = await codebase.getStats();
+  console.log(update.added, matches, file, chunks, definitions, references, callers,
+    dependencies, impact, architecture, context, stats);
+} finally {
+  // Stops the background watcher if one was started.
+  await codebase.close();
+}
 ```
+
+### SDK capabilities
+
+- **Index lifecycle:** `index`, `getStatus`, `getStats`, `getSnapshot`, `removeIndex`, `close`.
+- **Repository data:** `getFiles`, `getFile`, `getChunks`, `getSymbols`, `getRelations`.
+- **Search:** `search`, `semanticSearch`, `hybridSearch`.
+- **Symbol intelligence:** `findSymbol`, `findDefinition`, `findReferences`, `findCallers`, `findCallees`.
+- **Dependency intelligence:** `findDependencies`, `findDependents`, `analyzeArchitecture`, `findPath`, `getRepositoryMap`.
+- **Impact and context:** `analyzeChangeImpact`, `getContext`, `classifyQuery`.
+- **Additional analysis:** `findApiEndpoints`, `findSensitiveRegions`.
+- **Background indexing:** `startWatching`, `stopWatching`, `getWatchingStatus`.
+- **Embeddings:** `generateEmbeddings` and semantic/hybrid search when a compatible provider is configured.
+
+`Codebase.open(options)` is an equivalent async factory. The lower-level `CodebaseIndexer` class remains available for consumers who prefer explicit construction followed by `initialize()`.
+
+### Public package entry points
+
+```ts
+import { createCodebase, Codebase } from '@vortiqlabs/codebase-indexer';
+import type { CodeChunk, SymbolRecord, RelationRecord } from '@vortiqlabs/codebase-indexer';
+
+// Focused entry points are also available:
+import { createCodebase } from '@vortiqlabs/codebase-indexer/api';
+import { EmbeddingGemmaOnnxProvider } from '@vortiqlabs/codebase-indexer/embeddings';
+import { createCodebaseIndexerMcpServer } from '@vortiqlabs/codebase-indexer/mcp';
+import type { CodeChunk } from '@vortiqlabs/codebase-indexer/types';
+```
+
+The root entry point exports the supported SDK, indexing, graph, context, parser, embedding, MCP and data-model APIs. Internal dashboard implementation files are intentionally not part of the stable SDK contract.
 
 ---
 
