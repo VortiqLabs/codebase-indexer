@@ -50,3 +50,30 @@ test('optional embeddings persist, support semantic search, and reuse unchanged 
     await rm(temporary, { recursive: true, force: true });
   }
 });
+
+test('changing embedding providers regenerates vectors instead of mixing embedding spaces', async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'codebase-index-provider-change-'));
+  const workspace = path.join(temporary, 'workspace');
+  const indexDir = path.join(temporary, 'indexes');
+  const firstProvider = new TestEmbeddingProvider();
+  const secondProvider: EmbeddingProvider = {
+    id: 'replacement-provider-v2',
+    dimensions: () => 3,
+    embed: async () => [0, 0, 1],
+    embedBatch: async (texts) => texts.map(() => [0, 0, 1])
+  };
+  try {
+    await mkdir(workspace);
+    await writeFile(path.join(workspace, 'module.ts'), 'export function amber() { return "amber"; }');
+    const firstManager = await IndexManager.create({ workspacePath: workspace, indexDir, embeddingProvider: firstProvider });
+    await firstManager.index();
+    const secondManager = await IndexManager.create({ workspacePath: workspace, indexDir, embeddingProvider: secondProvider });
+    const updated = await secondManager.index();
+    assert.ok(updated.snapshot.vectors.length > 0);
+    assert.equal(updated.snapshot.metadata.embeddingProvider, 'replacement-provider-v2');
+    assert.equal(updated.snapshot.metadata.embeddingDimensions, 3);
+    assert.ok(updated.snapshot.vectors.every((vector) => vector.providerId === 'replacement-provider-v2' && vector.dimensions === 3));
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});

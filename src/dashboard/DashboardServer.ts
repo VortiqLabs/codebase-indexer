@@ -1,4 +1,5 @@
 import express, { type Express } from 'express';
+import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -15,12 +16,17 @@ import { detectSensitiveRegions } from '../intelligence/SensitiveDetector.js';
 import { DASHBOARD_PAGE } from './DashboardPage.js';
 import { GitHubIndexJobs } from './GitHubIndexJobs.js';
 import { GRAPH_PAGE } from './GraphPage.js';
+import { IndexManager } from '../core/IndexManager.js';
+import { EmbeddingGemmaOnnxProvider, type EmbeddingGemmaOnnxProviderOptions } from '../embeddings/EmbeddingGemmaOnnxProvider.js';
+import type { EmbeddingProvider } from '../embeddings/EmbeddingProvider.js';
 
 const execFileAsync = promisify(execFile);
 const graphClientPath = runtimePath(
   'dashboard',
   'graph-client.js'
 );
+
+const highlightClientPath = runtimePath('dashboard', 'highlight-client.js');
 
 const monacoAssetsPath = runtimePath(
   'dashboard',
@@ -33,6 +39,7 @@ const indexWorkerPath = runtimePath(
 );
 export interface DashboardAppOptions {
   githubRepositoryIndexer?: typeof indexGitHubRepository;
+  embeddingProviderFactory?: (options: EmbeddingGemmaOnnxProviderOptions) => EmbeddingProvider;
 }
 
 interface CachedIndex {
@@ -52,6 +59,19 @@ interface DashboardIndexSummary {
   relationKinds: Record<string, number>;
 }
 
+interface EmbeddingGenerationJob {
+  id: string;
+  uid: string;
+  status: 'running' | 'completed' | 'failed';
+  current: number;
+  total: number;
+  message: string;
+  startedAt: number;
+  durationMs?: number;
+  result?: { ok: true; provider: string; dimensions: number; vectorCount: number; durationMs: number };
+  error?: string;
+}
+
 const MAX_CACHE_ENTRIES = 100;
 
 export function defaultIndexDirectory(): string {
@@ -62,7 +82,9 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
   const app = express();
   const resolvedDirectory = path.resolve(indexDirectory);
   const cache = new Map<string, CachedIndex>();
+  const embeddingJobs = new Map<string, EmbeddingGenerationJob>();
   const githubJobs = new GitHubIndexJobs(resolvedDirectory, options.githubRepositoryIndexer);
+  const createEmbeddingProvider = options.embeddingProviderFactory ?? ((providerOptions: EmbeddingGemmaOnnxProviderOptions) => new EmbeddingGemmaOnnxProvider(providerOptions));
   app.use(express.json({ limit: '16kb' }));
 
   app.get('/', (_request, response) => response.type('html').send(DASHBOARD_PAGE));
@@ -74,6 +96,7 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
     response.type('html').send(GRAPH_PAGE.replace('__INDEX_UID__', request.params.uid));
   });
   app.get('/assets/graph-client.js', (_request, response) => response.sendFile(graphClientPath));
+  app.get('/assets/highlight-client.js', (_request, response) => response.sendFile(highlightClientPath));
   app.use('/assets/monaco', express.static(monacoAssetsPath));
 
   app.get('/api/system/memory', (_request, response) => {
@@ -254,6 +277,195 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
     response.json({ tests: await runIndexWorker(loaded.filePath, { operation: 'tests' }) });
   });
 
+  app.post('/api/indexes/:uid/tests/run', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+
+    const workspaceRoot = loaded.summary.metadata.workspaceRoot;
+    try {
+      const packageJsonPath = path.join(workspaceRoot, 'package.json');
+      const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as { scripts?: Record<string, unknown> };
+      if (typeof packageJson.scripts?.test !== 'string' || !packageJson.scripts.test.trim()) {
+        return response.status(400).json({ error: 'This workspace does not define a package.json test script.' });
+      }
+      const startedAt = Date.now();
+      try {
+        const result = await execFileAsync('npm', ['test'], {
+          cwd: workspaceRoot,
+          timeout: 180_000,
+          maxBuffer: 4 * 1024 * 1024,
+          encoding: 'utf8',
+          windowsHide: true
+        });
+        response.json({
+          ok: true,
+          command: 'npm test',
+          workspace: workspaceRoot,
+          durationMs: Date.now() - startedAt,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: 0
+        });
+      } catch (error) {
+        const failure = error as Error & { code?: number | string; stdout?: string; stderr?: string; killed?: boolean };
+        response.status(200).json({
+          ok: false,
+          command: 'npm test',
+          workspace: workspaceRoot,
+          durationMs: Date.now() - startedAt,
+          stdout: failure.stdout ?? '',
+          stderr: failure.stderr ?? failure.message,
+          exitCode: typeof failure.code === 'number' ? failure.code : null,
+          timedOut: failure.killed === true
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      response.status(400).json({ error: `Unable to run workspace tests: ${message}` });
+    }
+  });
+
+  app.post('/api/indexes/:uid/embeddings/test', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const body = request.body as Record<string, unknown>;
+    const dimensions = body.dimensions === undefined ? 256 : Number(body.dimensions);
+    const dtype = body.dtype === undefined ? 'q8' : body.dtype;
+    const query = typeof body.query === 'string' ? body.query.trim() : 'Where is authentication handled?';
+    if (![128, 256, 512, 768].includes(dimensions)) return response.status(400).json({ error: 'Dimensions must be 128, 256, 512, or 768' });
+    if (!['q4', 'q8', 'fp32'].includes(String(dtype))) return response.status(400).json({ error: 'Dtype must be q4, q8, or fp32' });
+    if (!query || query.length > 4000) return response.status(400).json({ error: 'Query must contain 1–4000 characters' });
+    let provider: (EmbeddingProvider & { close?: () => Promise<void> | void }) | undefined;
+    const startedAt = Date.now();
+    try {
+      const snapshot = await IndexReader.read(loaded.filePath, uid);
+      const sample = snapshot.chunks.find((chunk) => /\.(?:[cm]?[jt]sx?|py|rs|go|java|cpp|c|h|cs|rb|php|swift|kt)$/iu.test(chunk.filePath)) ?? snapshot.chunks[0];
+      if (!sample) return response.status(400).json({ error: 'This index has no code chunks to test against. Re-index the workspace first.' });
+      provider = createEmbeddingProvider({
+        dimensions: dimensions as 128 | 256 | 512 | 768,
+        dtype: dtype as 'q4' | 'q8' | 'fp32',
+        onProgress: (message) => console.info(`[embeddings] ${message}`)
+      }) as EmbeddingProvider & { close?: () => Promise<void> | void };
+      const queryVector = await provider.embed(query);
+      const [documentVector] = provider.embedChunks
+        ? await provider.embedChunks([sample])
+        : await provider.embedBatch([sample.text]);
+      if (!documentVector) throw new Error('EmbeddingGemma returned no document vector');
+      const dot = queryVector.reduce((sum, value, index) => sum + value * (documentVector[index] ?? 0), 0);
+      response.json({ ok: true, model: 'onnx-community/embeddinggemma-2-ONNX', provider: provider.id, device: 'cpu', dtype, dimensions: queryVector.length,
+        queryNorm: Math.sqrt(queryVector.reduce((sum, value) => sum + value * value, 0)),
+        documentNorm: Math.sqrt(documentVector.reduce((sum, value) => sum + value * value, 0)),
+        sampleFile: sample.filePath, sampleChunkId: sample.id, cosineSimilarity: dot, durationMs: Date.now() - startedAt });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      response.status(500).json({ error: message, durationMs: Date.now() - startedAt });
+    } finally { await provider?.close?.(); }
+  });
+
+  app.post('/api/indexes/:uid/embeddings/search', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const body = request.body as Record<string, unknown>;
+    const query = typeof body.query === 'string' ? body.query.trim() : '';
+    const requestedLimit = body.limit === undefined ? 10 : Number(body.limit);
+    const limit = Number.isSafeInteger(requestedLimit) ? Math.max(1, Math.min(50, requestedLimit)) : 10;
+    if (!query || query.length > 4000) return response.status(400).json({ error: 'Query must contain 1–4000 characters' });
+    const storedProvider = loaded.summary.metadata.embeddingProvider ?? '';
+    const match = /^embeddinggemma-2:onnx:(.+):(q4|q8|fp32):(128|256|512|768)$/u.exec(storedProvider);
+    if (!match) return response.status(409).json({ error: 'This index does not contain EmbeddingGemma ONNX vectors. Generate vectors with EmbeddingGemma first; vectors from LiteRT or other providers cannot be reused.' });
+    const model = match[1]!;
+    const dtype = match[2]!;
+    const dimensions = Number(match[3]!) as 128 | 256 | 512 | 768;
+    let provider: (EmbeddingProvider & { close?: () => Promise<void> | void }) | undefined;
+    const startedAt = Date.now();
+    try {
+      provider = createEmbeddingProvider({ model, dimensions, dtype: dtype as 'q4' | 'q8' | 'fp32' }) as EmbeddingProvider & { close?: () => Promise<void> | void };
+      const manager = await IndexManager.create({ workspacePath: loaded.summary.metadata.workspaceRoot, indexDir: resolvedDirectory, embeddingProvider: provider });
+      if (manager.uid !== uid) throw new Error('Workspace/index identity mismatch; refusing to query another index');
+      const results = await manager.semanticSearch(query, limit);
+      response.json({ ok: true, provider: provider.id, dimensions, resultCount: results.length, durationMs: Date.now() - startedAt,
+        results: results.map(({ file, chunk, score }) => ({ path: file.path, language: file.language, score, chunkId: chunk.id, excerpt: chunk.text.slice(0, 900) })) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      response.status(500).json({ error: message, durationMs: Date.now() - startedAt });
+    } finally { await provider?.close?.(); }
+  });
+
+  app.post('/api/indexes/:uid/embeddings/generate', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const body = request.body as Record<string, unknown>;
+    const dimensions = body.dimensions === undefined ? 256 : Number(body.dimensions);
+    const dtype = body.dtype === undefined ? 'q8' : body.dtype;
+    if (![128, 256, 512, 768].includes(dimensions)) return response.status(400).json({ error: 'Dimensions must be 128, 256, 512, or 768' });
+    if (!['q4', 'q8', 'fp32'].includes(String(dtype))) return response.status(400).json({ error: 'Dtype must be q4, q8, or fp32' });
+    const activeJob = [...embeddingJobs.values()].find((job) => job.uid === uid && job.status === 'running');
+    if (activeJob) return response.status(202).json({ jobId: activeJob.id, status: activeJob.status, current: activeJob.current, total: activeJob.total, message: activeJob.message });
+
+    const job: EmbeddingGenerationJob = {
+      id: randomUUID(), uid, status: 'running', current: 0,
+      total: loaded.summary.metadata.chunkCount, message: 'Starting EmbeddingGemma CPU runtime', startedAt: Date.now()
+    };
+    embeddingJobs.set(job.id, job);
+    response.status(202).json({ jobId: job.id, status: job.status, current: job.current, total: job.total, message: job.message });
+
+    void (async () => {
+      let provider: (EmbeddingProvider & { close?: () => Promise<void> | void }) | undefined;
+      try {
+        provider = createEmbeddingProvider({
+          dimensions: dimensions as 128 | 256 | 512 | 768,
+          dtype: dtype as 'q4' | 'q8' | 'fp32',
+          onProgress: (message) => { job.message = message; console.info(`[embeddings] ${message}`); }
+        }) as EmbeddingProvider & { close?: () => Promise<void> | void };
+        const manager = await IndexManager.create({ workspacePath: loaded.summary.metadata.workspaceRoot, indexDir: resolvedDirectory, embeddingProvider: provider });
+        if (manager.uid !== uid) throw new Error('Workspace/index identity mismatch; refusing to write embeddings to another index');
+        const vectorCount = await manager.generateEmbeddings(provider, (progress) => {
+          job.current = progress.current ?? job.current;
+          job.total = progress.total ?? job.total;
+          job.message = progress.message;
+          console.info(`[embeddings] ${progress.message} (${job.current}/${job.total})`);
+        });
+        cache.delete(loaded.filePath);
+        job.result = { ok: true, provider: provider!.id ?? provider!.constructor.name, dimensions: provider!.dimensions(), vectorCount, durationMs: Date.now() - job.startedAt };
+        job.status = 'completed';
+        job.current = job.total;
+        job.message = 'Vector generation completed';
+        job.durationMs = Date.now() - job.startedAt;
+      } catch (error) {
+        job.error = error instanceof Error ? error.message : String(error);
+        job.status = 'failed';
+        job.message = 'Vector generation failed';
+        job.durationMs = Date.now() - job.startedAt;
+        console.error(`[embeddings] Job ${job.id} failed: ${job.error}`);
+      } finally {
+        try { await provider?.close?.(); }
+        catch (error) { console.error('[embeddings] Failed to close provider:', error); }
+      }
+    })();
+  });
+
+  app.get('/api/embedding-jobs/:jobId', (request, response) => {
+    const job = embeddingJobs.get(request.params.jobId);
+    if (!job) return response.status(404).json({ error: 'Embedding job not found' });
+    response.json({
+      jobId: job.id, uid: job.uid, status: job.status, current: job.current,
+      total: job.total, message: job.message, durationMs: job.durationMs,
+      result: job.result, error: job.error
+    });
+  });
+
   app.get('/api/indexes/:uid/configDoc', async (request, response) => {
     const uid = request.params.uid;
     if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid UID' });
@@ -385,6 +597,74 @@ export function createDashboardApp(indexDirectory: string, options: DashboardApp
       ? snapshot.symbols.filter((symbol) => symbol.name.toLowerCase().includes(query) || symbol.filePath.toLowerCase().includes(query))
       : snapshot.symbols;
     response.json({ symbols: filtered });
+  });
+
+  app.get('/api/indexes/:uid/chunks', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid index UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const snapshot = await IndexReader.read(loaded.filePath, uid);
+    const offsetValue = Number(request.query.offset ?? 0);
+    const limitValue = Number(request.query.limit ?? 100);
+    const offset = Number.isFinite(offsetValue) ? Math.max(0, Math.floor(offsetValue)) : 0;
+    const limit = Number.isFinite(limitValue) ? Math.min(500, Math.max(1, Math.floor(limitValue))) : 100;
+    const query = typeof request.query.q === 'string' ? request.query.q.trim().toLowerCase() : '';
+    const filePath = typeof request.query.file === 'string' ? request.query.file : '';
+    const filteredChunks = snapshot.chunks.filter((chunk) => (!filePath || chunk.filePath === filePath) && (!query || chunk.filePath.toLowerCase().includes(query) || chunk.hash.toLowerCase().includes(query) || chunk.text.toLowerCase().includes(query)));
+    const chunks = filteredChunks.slice(offset, offset + limit);
+    response.json({
+      chunks,
+      total: filteredChunks.length,
+      offset,
+      limit,
+      nextOffset: offset + chunks.length,
+      files: [...new Set(snapshot.chunks.map((chunk) => chunk.filePath))].sort()
+    });
+  });
+
+  app.get('/api/indexes/:uid/references', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid index UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const snapshot = await IndexReader.read(loaded.filePath, uid);
+    const query = typeof request.query.q === 'string' ? request.query.q.trim().toLowerCase() : '';
+    const kind = typeof request.query.kind === 'string' ? request.query.kind : '';
+    const relations = snapshot.relations.filter((relation) => {
+      if (kind && relation.kind !== kind) return false;
+      if (!query) return true;
+      const from = snapshot.symbols.find((symbol) => symbol.id === relation.fromSymbolId);
+      const to = snapshot.symbols.find((symbol) => symbol.id === relation.toSymbolId);
+      return [relation.targetName, relation.filePath, from?.name, to?.name].some((value) => value?.toLowerCase().includes(query));
+    });
+    response.json({ relations, total: snapshot.relations.length, symbols: snapshot.symbols });
+  });
+
+  app.get('/api/indexes/:uid/callgraph', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid index UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    const snapshot = await IndexReader.read(loaded.filePath, uid);
+    const query = typeof request.query.q === 'string' ? request.query.q.trim().toLowerCase() : '';
+    const symbol = query ? snapshot.symbols.find((item) => item.name.toLowerCase() === query) ?? snapshot.symbols.find((item) => item.name.toLowerCase().includes(query)) : undefined;
+    if (!symbol) return response.json({ selected: null, matches: snapshot.symbols.filter((item) => !query || item.name.toLowerCase().includes(query)).slice(0, 100), callers: [], callees: [], totalCalls: snapshot.relations.filter((item) => item.kind === 'calls').length });
+    const callers = snapshot.relations.filter((item) => item.kind === 'calls' && item.toSymbolId === symbol.id);
+    const callees = snapshot.relations.filter((item) => item.kind === 'calls' && item.fromSymbolId === symbol.id);
+    response.json({ selected: symbol, callers, callees, matches: [], totalCalls: snapshot.relations.filter((item) => item.kind === 'calls').length, symbols: snapshot.symbols });
+  });
+
+  app.get('/api/indexes/:uid/architecture', async (request, response) => {
+    const uid = request.params.uid;
+    if (!/^[a-f\d]{32}$/iu.test(uid)) return response.status(400).json({ error: 'Invalid index UID' });
+    const { indexes } = await loadIndexes(resolvedDirectory, cache);
+    const loaded = indexes.find(({ summary }) => summary.metadata.uid === uid);
+    if (!loaded) return response.status(404).json({ error: 'Index not found' });
+    response.json(await runIndexWorker(loaded.filePath, { operation: 'architecture' }));
   });
 
   app.get('/api/indexes/:uid/security', async (request, response) => {
@@ -641,7 +921,7 @@ function isPathInside(root: string, candidate: string): boolean {
 }
 
 interface IndexWorkerRequest {
-  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence' | 'cycles' | 'matrix' | 'radial' | 'flow' | 'complexity' | 'duplicates' | 'database' | 'tests' | 'configDoc' | 'path';
+  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence' | 'cycles' | 'matrix' | 'radial' | 'flow' | 'complexity' | 'duplicates' | 'database' | 'tests' | 'configDoc' | 'path' | 'architecture';
   all?: boolean;
   query?: string;
   limit?: number;

@@ -152,6 +152,13 @@ mkdirSync(
   },
 );
 
+mkdirSync(
+  p("dist", "webview"),
+  {
+    recursive: true,
+  },
+);
+
 /* -------------------------------------------------------------------------- */
 /* Tree-sitter grammars                                                       */
 /* -------------------------------------------------------------------------- */
@@ -293,6 +300,37 @@ await esbuildRun({
   format: "iife",
   platform: "browser",
   outfile: "dist/dashboard/graph-client.js",
+});
+
+/* -------------------------------------------------------------------------- */
+/* Dashboard syntax highlighting                                              */
+/* -------------------------------------------------------------------------- */
+
+console.log("\nBundling dashboard syntax highlighter...");
+
+await esbuildRun({
+  entryPoints: ["src/dashboard/highlight-client.js"],
+  bundle: true,
+  minify: true,
+  format: "iife",
+  platform: "browser",
+  outfile: "dist/dashboard/highlight-client.js",
+});
+
+/* -------------------------------------------------------------------------- */
+/* LiteRT-LM embedding WebView runtime                                         */
+/* -------------------------------------------------------------------------- */
+
+console.log("\nBundling LiteRT-LM embedding WebView runtime...");
+
+await esbuildRun({
+  entryPoints: ["src/embeddings/litert-webview-runtime.ts"],
+  bundle: true,
+  minify: true,
+  platform: "browser",
+  target: "chrome120",
+  format: "iife",
+  outfile: "dist/webview/litert-embedding-runtime.js",
 });
 
 /* -------------------------------------------------------------------------- */

@@ -44,3 +44,20 @@ test('Tree-sitter loads every bundled grammar', async () => {
   }
   assert.ok(await parser.parse('component.tsx', 'export const View = () => <div />;', 'typescript'));
 });
+
+test('Tree-sitter safely reuses a bounded parser pool across concurrent language switches', async () => {
+  const parser = new TreeSitterParser(2);
+  const tasks = Array.from({ length: 40 }, (_, index) => {
+    const isTypeScript = index % 2 === 0;
+    return parser.parse(
+      `src/file-${index}.${isTypeScript ? 'ts' : 'js'}`,
+      isTypeScript ? `export function task${index}(): number { return ${index}; }` : `export function task${index}() { return ${index}; }`,
+      isTypeScript ? 'typescript' : 'javascript'
+    );
+  });
+  const results = await Promise.all(tasks);
+  assert.equal(results.length, 40);
+  for (let index = 0; index < results.length; index++) {
+    assert.ok(results[index]?.symbols.some((symbol) => symbol.name === `task${index}`));
+  }
+});
