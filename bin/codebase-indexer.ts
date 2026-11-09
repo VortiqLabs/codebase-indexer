@@ -9,6 +9,8 @@ import { IndexReader } from '../src/storage/BinaryIndex.js';
 import type { IndexSnapshot } from '../src/storage/IndexFormat.js';
 import { createDashboardApp, defaultIndexDirectory } from '../src/dashboard/DashboardServer.js';
 import { indexGitHubRepository } from '../src/github/GitHubRepositoryIndexer.js';
+import { OpenAICompatibleEmbeddingProvider } from '../src/embeddings/OpenAICompatibleEmbeddingProvider.js';
+import { EmbeddingGemmaOnnxProvider } from '../src/embeddings/EmbeddingGemmaOnnxProvider.js';
 
 interface Arguments {
   positionals: string[];
@@ -80,8 +82,10 @@ async function main(): Promise<void> {
   const noEmbeddings = parsed.flags.has('--no-embeddings');
   const verboseMemory = parsed.flags.has('--verbose-memory');
 
+  const embeddingProvider = createEmbeddingProvider(parsed);
   const manager = await IndexManager.create({
     workspacePath,
+    ...(embeddingProvider ? { embeddingProvider } : {}),
     ...(firstValue(parsed, '--index-dir') ? { indexDir: path.resolve(firstValue(parsed, '--index-dir')!) } : {}),
     ...(firstValue(parsed, '--max-file-size') ? { maxFileSize: parseSize(firstValue(parsed, '--max-file-size')!) } : {}),
     ...(parsed.values.has('--ignore') ? { patterns: parsed.values.get('--ignore')! } : {}),
@@ -278,7 +282,7 @@ function parseArguments(args: string[]): Arguments {
   const positionals: string[] = [];
   const flags = new Set<string>();
   const values = new Map<string, string[]>();
-  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index', '--host', '--port', '--ref', '--depth', '--max-nodes', '--workers', '--memory-limit', '--profile']);
+  const valueOptions = new Set(['--index-dir', '--max-file-size', '--ignore', '--language', '--pattern', '--limit', '--path', '--index', '--host', '--port', '--ref', '--depth', '--max-nodes', '--workers', '--memory-limit', '--profile', '--embedding-provider', '--embedding-model', '--embedding-dimensions', '--embedding-base-url', '--embedding-api-key', '--embedding-dtype', '--embedding-cache-dir']);
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     if (!arg.startsWith('--')) {
@@ -345,8 +349,36 @@ function parseGitHubRepository(value: string): { owner: string; repository: stri
   return { owner: parts[0], repository: parts[1] };
 }
 
+function createEmbeddingProvider(parsed: Arguments) {
+  const kind = firstValue(parsed, '--embedding-provider') ?? process.env.CODEBASE_EMBEDDING_PROVIDER;
+  if (!kind || kind === 'none') return undefined;
+  const dimensions = Number(firstValue(parsed, '--embedding-dimensions') ?? process.env.CODEBASE_EMBEDDING_DIMENSIONS ?? 256);
+  if (kind === 'embeddinggemma-onnx') {
+    const dtype = (firstValue(parsed, '--embedding-dtype') ?? process.env.CODEBASE_EMBEDDING_DTYPE ?? 'q8') as 'q4' | 'q8' | 'fp32';
+    if (!['q4', 'q8', 'fp32'].includes(dtype)) throw new Error('--embedding-dtype must be q4, q8, or fp32');
+    const model = firstValue(parsed, '--embedding-model') ?? process.env.CODEBASE_EMBEDDING_MODEL;
+    const cacheDir = firstValue(parsed, '--embedding-cache-dir') ?? process.env.CODEBASE_EMBEDDING_CACHE_DIR;
+    return new EmbeddingGemmaOnnxProvider({
+      dimensions: dimensions as 128 | 256 | 512 | 768,
+      dtype,
+      ...(model ? { model } : {}),
+      ...(cacheDir ? { cacheDir } : {}),
+      onProgress: (message) => { if (!parsed.flags.has('--json')) console.error(message); }
+    });
+  }
+  if (kind === 'openai-compatible') {
+    const baseUrl = firstValue(parsed, '--embedding-base-url') ?? process.env.CODEBASE_EMBEDDING_BASE_URL;
+    const model = firstValue(parsed, '--embedding-model') ?? process.env.CODEBASE_EMBEDDING_MODEL;
+    if (!baseUrl || !model) throw new Error('OpenAI-compatible embeddings require --embedding-base-url and --embedding-model (or CODEBASE_EMBEDDING_BASE_URL / CODEBASE_EMBEDDING_MODEL)');
+    const apiKey = firstValue(parsed, '--embedding-api-key') ?? process.env.CODEBASE_EMBEDDING_API_KEY;
+    return new OpenAICompatibleEmbeddingProvider({ baseUrl, model, dimensions, ...(apiKey ? { apiKey } : {}) });
+  }
+  throw new Error(`Unknown embedding provider '${kind}'. Use embeddinggemma-onnx, openai-compatible, or none.`);
+}
+
 function printHelp(): void {
-  console.log('codebase-indexer <index|index-github|status|search|symbols|references|callers|callees|files|inspect|remove|watch|dashboard|mcp> [path or query] [options]');
+  console.log('codebase-indexer <index|index-github|embeddings|status|search|symbols|references|callers|callees|files|inspect|remove|watch|dashboard|mcp> [path or query] [options]');
+  console.log('Embedding options: --embedding-provider <embeddinggemma-onnx|openai-compatible> --embedding-model <id> --embedding-dimensions <128|256|512|768> --embedding-dtype <q4|q8|fp32> --embedding-cache-dir <path> --embedding-base-url <url> --embedding-api-key <key>');
   console.log('Options: --index-dir <path> --force --json --max-file-size <size> --ignore <pattern> --host <host> --port <port> --ref <github-ref> --workers <number> --memory-limit <MB> --profile <default|large> --no-embeddings --verbose-memory');
 }
 

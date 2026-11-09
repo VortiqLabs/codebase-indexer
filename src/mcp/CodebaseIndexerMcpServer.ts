@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { IndexManager } from '../core/IndexManager.js';
 import { indexGitHubRepository } from '../github/GitHubRepositoryIndexer.js';
 import { IndexReader } from '../storage/BinaryIndex.js';
+import { analyzeChangeImpact } from '../intelligence/GraphQuery.js';
+import { analyzeArchitecture } from '../intelligence/ArchitectureAnalyzer.js';
 import type { IndexSnapshot } from '../storage/IndexFormat.js';
 
 export interface CodebaseIndexerMcpServerOptions {
@@ -22,6 +24,7 @@ interface LoadedIndex {
 export function createCodebaseIndexerMcpServer(options: CodebaseIndexerMcpServerOptions = {}): McpServer {
   const indexDir = path.resolve(options.indexDir ?? process.env.CODEBASE_INDEX_DIR ?? path.join(os.homedir(), '.cache', 'codebase-indexer'));
   const server = new McpServer({ name: 'codebase-indexer', version: '0.1.0' });
+  const watchingManagers = new Map<string, IndexManager>();
 
   server.registerTool('list_indexes', {
     description: 'List all valid codebase indexes available in the configured index directory.',
@@ -88,6 +91,46 @@ export function createCodebaseIndexerMcpServer(options: CodebaseIndexerMcpServer
     }
   });
 
+  server.registerTool('analyze_change_impact', {
+    description: 'Estimate what could be affected if a file or symbol changes. Returns direct and transitive dependent files, affected symbols, relation confidence, and caveats. Use an exact symbol name or workspace-relative file path.',
+    inputSchema: {
+      query: z.string().min(1),
+      indexUid: z.string().optional(),
+      maxDepth: z.number().int().min(1).max(8).optional()
+    }
+  }, async ({ query, indexUid, maxDepth }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const selected = indexes.filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (selected.length === 0) throw new Error('No matching codebase index found; call list_indexes first.');
+      return jsonResult(selected.map(({ snapshot }) => ({
+        indexUid: snapshot.metadata.uid,
+        workspacePath: snapshot.metadata.workspaceRoot,
+        ...analyzeChangeImpact(snapshot, query, maxDepth ?? 3)
+      })));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('analyze_architecture', {
+    description: 'Analyze the indexed repository file-dependency graph. Reports resolvable relative imports, circular dependency groups, fan-in/fan-out, entry-point candidates, and unresolved relative imports.',
+    inputSchema: { indexUid: z.string().optional() }
+  }, async ({ indexUid }) => {
+    try {
+      const { indexes } = await loadIndexes(indexDir);
+      const selected = indexes.filter(({ snapshot }) => !indexUid || snapshot.metadata.uid === indexUid);
+      if (selected.length === 0) throw new Error('No matching codebase index found; call list_indexes first.');
+      return jsonResult(await Promise.all(selected.map(async ({ snapshot }) => ({
+        indexUid: snapshot.metadata.uid,
+        workspacePath: snapshot.metadata.workspaceRoot,
+        ...await analyzeArchitecture(snapshot, snapshot.metadata.workspaceRoot)
+      }))));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
   server.registerTool('index_local_workspace', {
     description: 'Index or refresh a local workspace directory into the configured index directory.',
     inputSchema: {
@@ -114,6 +157,57 @@ export function createCodebaseIndexerMcpServer(options: CodebaseIndexerMcpServer
     } catch (error) {
       return errorResult(error);
     }
+  });
+
+  server.registerTool('start_watching', {
+    description: 'Start background filesystem watching for a local workspace. Creates an initial index if needed, then debounces changes and incrementally refreshes the index.',
+    inputSchema: {
+      workspacePath: z.string().min(1),
+      debounceMs: z.number().int().min(50).max(60_000).optional()
+    }
+  }, async ({ workspacePath, debounceMs }) => {
+    try {
+      const manager = await IndexManager.create({ workspacePath: path.resolve(workspacePath), indexDir });
+      const current = await manager.status();
+      const initialIndex = current.indexed ? undefined : await manager.index();
+      const status = await manager.startWatching({ ...(debounceMs !== undefined ? { debounceMs } : {}) });
+      watchingManagers.set(manager.uid, manager);
+      return jsonResult({
+        indexUid: manager.uid,
+        workspacePath: manager.workspacePath,
+        initialIndex: initialIndex ? {
+          added: initialIndex.added, changed: initialIndex.changed, deleted: initialIndex.deleted,
+          fileCount: initialIndex.snapshot.metadata.fileCount
+        } : undefined,
+        watcher: status
+      });
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('stop_watching', {
+    description: 'Stop background filesystem watching for an active workspace watcher.',
+    inputSchema: { indexUid: z.string().regex(/^[a-f\d]{32}$/iu) }
+  }, async ({ indexUid }) => {
+    try {
+      const manager = watchingManagers.get(indexUid);
+      if (!manager) throw new Error('No active watcher for this index UID');
+      const status = await manager.stopWatching();
+      watchingManagers.delete(indexUid);
+      return jsonResult({ indexUid, watcher: status });
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool('watch_status', {
+    description: 'Get the live background watcher state, pending changes, last indexing result, and errors.',
+    inputSchema: { indexUid: z.string().regex(/^[a-f\d]{32}$/iu) }
+  }, async ({ indexUid }) => {
+    const manager = watchingManagers.get(indexUid);
+    if (!manager) return errorResult(new Error('No active watcher for this index UID'));
+    return jsonResult({ indexUid, watcher: manager.getWatchingStatus() });
   });
 
   server.registerTool('index_github_repository', {

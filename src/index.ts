@@ -1,9 +1,14 @@
+export { Codebase, createCodebase } from './core/Codebase.js';
+export type { CodebaseOptions } from './core/Codebase.js';
+export type { IndexProgress } from './core/IndexManager.js';
 export { FileScanner } from './scanner/FileScanner.js';
 export type { FileScannerOptions } from './scanner/FileScanner.js';
 export { IgnoreMatcher, DEFAULT_EXCLUDES } from './scanner/IgnoreMatcher.js';
 export type { IgnoreMatcherOptions } from './scanner/IgnoreMatcher.js';
 export { detectLanguage } from './scanner/LanguageDetector.js';
 export { IndexManager } from './core/IndexManager.js';
+export { BackgroundWatcher } from './core/BackgroundWatcher.js';
+export type { BackgroundWatcherOptions, BackgroundWatcherStatus } from './core/BackgroundWatcher.js';
 export { CodebaseIndexer } from './core/CodebaseIndexer.js';
 export type { IndexManagerOptions, IndexUpdateResult } from './core/IndexManager.js';
 export { indexGitHubRepository } from './github/GitHubRepositoryIndexer.js';
@@ -27,7 +32,24 @@ export type { FileRecord, ScanError, ScanResult } from './types/FileRecord.js';
 export type { ApiEndpoint } from './intelligence/ApiDetector.js';
 export { classifyQuery } from './intelligence/QueryIntent.js';
 export type { QueryIntent, QueryIntentKind } from './intelligence/QueryIntent.js';
-export type { GraphPathResult, GraphQueryOptions } from './intelligence/GraphQuery.js';
+export { analyzeChangeImpact } from './intelligence/GraphQuery.js';
+export type { ChangeImpactResult, GraphPathResult, GraphQueryOptions } from './intelligence/GraphQuery.js';
 export { buildRepositoryMap } from './intelligence/RepositoryMap.js';
 export type { RepositoryArea, RepositoryMap } from './intelligence/RepositoryMap.js';
 export type { SensitiveRegion } from './intelligence/SensitiveDetector.js';
+export { analyzeArchitecture } from './intelligence/ArchitectureAnalyzer.js';
+export type { ArchitectureReport, ArchitectureDependency, ArchitectureCycle, ArchitectureFileSummary } from './intelligence/ArchitectureAnalyzer.js';
+
+export { OpenAICompatibleEmbeddingProvider } from './embeddings/OpenAICompatibleEmbeddingProvider.js';
+export type { OpenAICompatibleEmbeddingOptions } from './embeddings/OpenAICompatibleEmbeddingProvider.js';
+export { LiteRTEmbeddingProvider, LiteRTWebviewEmbeddingTransport, createLiteRTEmbeddingWebviewHtml } from './embeddings/LiteRTEmbeddingProvider.js';
+export type { LiteRTEmbeddingProviderOptions, LiteRTEmbeddingTask, LiteRTEmbeddingTransport, LiteRTWebviewBridgeOptions, LiteRTWebviewHtmlOptions } from './embeddings/LiteRTEmbeddingProvider.js';
+
+export { EmbeddingGemmaOnnxProvider } from './embeddings/EmbeddingGemmaOnnxProvider.js';
+export type { EmbeddingGemmaOnnxProviderOptions, EmbeddingGemmaOnnxRuntime, EmbeddingGemmaOnnxDtype } from './embeddings/EmbeddingGemmaOnnxProvider.js';
+
+export { TreeSitterParser } from './parser/TreeSitterParser.js';
+export { PersistentQueryEngine } from './storage/PersistentQueryEngine.js';
+export { StagingDatabase } from './storage/StagingDatabase.js';
+export { detectApiEndpoints } from './intelligence/ApiDetector.js';
+export { detectSensitiveRegions } from './intelligence/SensitiveDetector.js';

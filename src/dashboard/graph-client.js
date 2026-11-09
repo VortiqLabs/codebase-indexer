@@ -1,329 +1,65 @@
-import {
-  forceCenter,
-  forceCollide,
-  forceLink,
-  forceManyBody,
-  forceSimulation,
-  select,
-  zoom,
-  zoomIdentity
-} from 'd3';
+import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, select, zoom, zoomIdentity } from 'd3';
 
 const uid = document.body.dataset.indexUid;
 const canvas = document.getElementById('network');
-const context = canvas.getContext('2d');
-
-const relationColors = {
-  calls: '#61d6ad',
-  imports: '#70b7e3',
-  references: '#f4c95d',
-  contains: '#9aa99f',
-  extends: '#ff8868',
-  implements: '#bd98f2',
-  exports: '#ee8dbe'
-};
-
-const symbolColors = {
-  class: '#d4f46c',
-  function: '#ff8868',
-  method: '#61d6ad',
-  variable: '#f4c95d',
-  constant: '#f2a65a',
-  interface: '#70b7e3',
-  type: '#bd98f2',
-  module: '#ee8dbe',
-  namespace: '#6ec6d3',
-  property: '#a6d17a',
-  constructor: '#f28fba'
-};
-
-let currentMode = 'dot';
-let nodes = [];
-let links = [];
-let matrixData = null;
-let radialData = null;
-let flowData = null;
-let highlightedPath = new Set();
-let simulation = null;
-let transform = zoomIdentity;
-let activeNode = null;
-let hoveredNode = null;
-let pixelRatio = window.devicePixelRatio || 1;
-let canvasWidth = 1;
-let canvasHeight = 1;
-
-function isLightTheme() {
-  return document.documentElement.getAttribute('data-theme') === 'light';
-}
-
-function themeText() {
-  return isLightTheme() ? '#111111' : '#ffffff';
-}
-
-function themeBg() {
-  return isLightTheme() ? '#ffffff' : '#080808';
-}
-
-function draw() {
-  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-  context.clearRect(0, 0, canvasWidth, canvasHeight);
-  context.save();
-  context.translate(transform.x, transform.y);
-  context.scale(transform.k, transform.k);
-
-  if (currentMode === 'matrix' && matrixData) {
-    drawMatrixView();
-  } else {
-    drawNetworkGraph();
-  }
-
-  context.restore();
-}
-
-function drawNetworkGraph() {
-  for (const link of links) {
-    if (!link.source || !link.target || typeof link.source === 'string' || typeof link.target === 'string') continue;
-    const color = relationColors[link.kind] || '#8a8a8a';
-    const isHighlighted = highlightedPath.has(link.source.name) && highlightedPath.has(link.target.name);
-    context.globalAlpha = isHighlighted ? 1.0 : 0.6;
-    context.strokeStyle = color;
-    context.fillStyle = color;
-    context.lineWidth = isHighlighted ? 2.5 : 1;
-    context.setLineDash([4, 4]);
-
-    const dx = link.target.x - link.source.x;
-    const dy = link.target.y - link.source.y;
-    const distance = Math.hypot(dx, dy) || 1;
-    const endX = link.target.x - (dx / distance) * 8;
-    const endY = link.target.y - (dy / distance) * 8;
-
-    context.beginPath();
-    context.moveTo(link.source.x, link.source.y);
-    context.lineTo(endX, endY);
-    context.stroke();
-    context.setLineDash([]);
-
-    // Arrowhead
-    const angle = Math.atan2(endY - link.source.y, endX - link.source.x);
-    context.beginPath();
-    context.moveTo(endX, endY);
-    context.lineTo(endX - 6 * Math.cos(angle - Math.PI / 6), endY - 6 * Math.sin(angle - Math.PI / 6));
-    context.lineTo(endX - 6 * Math.cos(angle + Math.PI / 6), endY - 6 * Math.sin(angle + Math.PI / 6));
-    context.closePath();
-    context.fill();
-  }
-
-  for (const node of nodes) {
-    const isSelected = activeNode === node;
-    const isHighlighted = highlightedPath.has(node.name);
-    const radius = isSelected ? 9 : 6;
-    context.globalAlpha = 1.0;
-
-    context.beginPath();
-    context.arc(node.x, node.y, radius, 0, Math.PI * 2);
-    context.fillStyle = symbolColors[node.kind] || '#8a8a8a';
-    context.fill();
-    context.strokeStyle = isSelected || isHighlighted ? '#ffffff' : '#242424';
-    context.lineWidth = isSelected || isHighlighted ? 2 : 1;
-    context.stroke();
-
-    context.font = (isSelected ? '600 11px' : '10px') + ' "JetBrains Mono", monospace';
-    context.fillStyle = themeText();
-    context.fillText(node.name, node.x + radius + 4, node.y + 3);
-  }
-}
-
-function drawMatrixView() {
-  if (!matrixData || !matrixData.nodes.length) return;
-  const size = matrixData.nodes.length;
-  const cellSize = Math.min(24, Math.floor(canvasWidth / (size + 3)));
-
-  for (let i = 0; i < size; i++) {
-    const node = matrixData.nodes[i];
-    context.fillStyle = themeText();
-    context.font = '10px "JetBrains Mono", monospace';
-    context.fillText(node.name.slice(0, 10), 10, (i + 2) * cellSize);
-
-    for (let j = 0; j < size; j++) {
-      const val = matrixData.matrix[i][j];
-      const x = (j + 2) * cellSize;
-      const y = (i + 1) * cellSize;
-
-      context.strokeStyle = '#242424';
-      context.strokeRect(x, y, cellSize, cellSize);
-
-      if (val > 0) {
-        context.fillStyle = '#61d6ad';
-        context.fillRect(x + 2, y + 2, cellSize - 4, cellSize - 4);
-      }
-    }
-  }
-}
-
-function resize() {
-  const bounds = canvas.getBoundingClientRect();
-  canvasWidth = bounds.width;
-  canvasHeight = bounds.height;
-  pixelRatio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(canvasWidth * pixelRatio);
-  canvas.height = Math.round(canvasHeight * pixelRatio);
-  draw();
-}
-
-function switchMode(mode) {
-  currentMode = mode;
-  document.querySelectorAll('.mode-btn').forEach(b => {
-    b.classList.toggle('active', b.getAttribute('data-mode') === mode);
-  });
-
-  if (mode === 'matrix') {
-    fetch('/api/indexes/' + encodeURIComponent(uid) + '/graph/matrix')
-      .then(r => r.json())
-      .then(data => {
-        matrixData = data;
-        draw();
-      });
-  } else if (mode === 'radial') {
-    fetch('/api/indexes/' + encodeURIComponent(uid) + '/graph/radial')
-      .then(r => r.json())
-      .then(data => {
-        radialData = data;
-        applyRadialLayout(data);
-        draw();
-      });
-  } else if (mode === 'flow') {
-    fetch('/api/indexes/' + encodeURIComponent(uid) + '/graph/flow')
-      .then(r => r.json())
-      .then(data => {
-        flowData = data;
-        applyFlowLayout(data);
-        draw();
-      });
-  } else if (mode === 'hierarchical') {
-    applyHierarchicalLayout();
-    draw();
-  } else {
-    restartSimulation();
-  }
-}
-
-function applyRadialLayout(data) {
-  if (!data || !data.nodes.length) return;
-  const cx = canvasWidth / 2;
-  const cy = canvasHeight / 2;
-  const radius = 180;
-
-  data.nodes.forEach((n, idx) => {
-    if (idx === 0) {
-      n.x = cx;
-      n.y = cy;
-    } else {
-      const angle = (Math.PI * 2 * idx) / (data.nodes.length - 1);
-      n.x = cx + Math.cos(angle) * radius;
-      n.y = cy + Math.sin(angle) * radius;
-    }
-  });
-  nodes = data.nodes;
-  links = data.edges.map(e => ({ source: nodes.find(n => n.id === e.source), target: nodes.find(n => n.id === e.target), kind: e.kind }));
-}
-
-function applyFlowLayout(data) {
-  if (!data || !data.nodes.length) return;
-  const levelX = { 1: 100, 2: 350, 3: 600 };
-  const counts = { 1: 0, 2: 0, 3: 0 };
-
-  data.nodes.forEach((n) => {
-    const lvl = n.level || 1;
-    counts[lvl] = (counts[lvl] || 0) + 1;
-    n.x = levelX[lvl] || 200;
-    n.y = counts[lvl] * 35 + 80;
-  });
-  nodes = data.nodes;
-  links = data.edges.map(e => ({ source: nodes.find(n => n.id === e.source), target: nodes.find(n => n.id === e.target), kind: e.kind }));
-}
-
-function applyHierarchicalLayout() {
-  nodes.forEach((n, idx) => {
-    const depth = (n.filePath.split('/').length - 1);
-    n.x = depth * 140 + 80;
-    n.y = (idx % 15) * 35 + 60;
-  });
-}
-
-function restartSimulation() {
-  if (simulation) simulation.stop();
-  simulation = forceSimulation(nodes)
-    .force('link', forceLink(links).id((n) => n.id).distance(80))
-    .force('charge', forceManyBody().strength(-200))
-    .force('center', forceCenter(canvasWidth / 2, canvasHeight / 2))
-    .force('collide', forceCollide(18))
-    .on('tick', draw);
-}
-
-const zoomBehavior = zoom()
-  .scaleExtent([0.1, 6])
-  .on('zoom', (e) => {
-    transform = e.transform;
-    draw();
-  });
-
-select(canvas).call(zoomBehavior);
-
-document.querySelectorAll('.mode-btn').forEach(b => {
-  b.addEventListener('click', () => switchMode(b.getAttribute('data-mode')));
-});
-
-document.getElementById('btn-theme')?.addEventListener('click', () => {
-  const current = document.documentElement.getAttribute('data-theme') || 'dark';
-  const next = current === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('codebase_theme', next);
-  draw();
-});
-
-document.getElementById('btn-fit')?.addEventListener('click', () => {
-  select(canvas).transition().call(zoomBehavior.transform, zoomIdentity);
-});
-
-document.getElementById('btn-find-path')?.addEventListener('click', () => {
-  const from = document.getElementById('path-from').value.trim();
-  const to = document.getElementById('path-to').value.trim();
-  if (!from || !to) return;
-
-  fetch('/api/indexes/' + encodeURIComponent(uid) + '/graph/path?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to))
-    .then(r => r.json())
-    .then(data => {
-      highlightedPath = new Set(data.nodes || []);
-      document.getElementById('path-result').textContent = 'Path length: ' + data.depth + ' hops (' + (data.nodes || []).join(' → ') + ')';
-      draw();
-    });
-});
-
-document.getElementById('btn-cycles')?.addEventListener('click', () => {
-  fetch('/api/indexes/' + encodeURIComponent(uid) + '/graph/cycles')
-    .then(r => r.json())
-    .then(data => {
-      const cycles = data.cycles || [];
-      if (cycles.length > 0) {
-        highlightedPath = new Set(cycles[0].symbols);
-        document.getElementById('status-text').textContent = 'Found ' + cycles.length + ' cycle(s)! Highlighting: ' + cycles[0].symbols.join(' → ');
-      } else {
-        document.getElementById('status-text').textContent = 'No dependency cycles detected.';
-      }
-      draw();
-    });
-});
-
-window.addEventListener('resize', resize);
-resize();
-
-fetch('/api/indexes/' + encodeURIComponent(uid) + '?all=true')
-  .then((r) => r.json())
-  .then((payload) => {
-    nodes = payload.graph.nodes || [];
-    links = payload.graph.edges || [];
-    document.getElementById('workspace-name').textContent = payload.metadata.workspaceRoot.split('/').pop() || 'Workspace';
-    document.getElementById('workspace-path').textContent = payload.metadata.workspaceRoot;
-    document.getElementById('status-text').textContent = nodes.length + ' nodes · ' + links.length + ' edges loaded';
-    restartSimulation();
-  });
+const ctx = canvas.getContext('2d');
+const relationColors = { calls:'#63d6b0', imports:'#7ea6ff', references:'#f3bd69', contains:'#91a0b5', extends:'#ff9277', implements:'#bd9cf5', exports:'#e98fc1', uses:'#74c8d8' };
+const kindColors = { class:'#c7e78b', function:'#ff9277', method:'#63d6b0', variable:'#f3bd69', constant:'#f0a65e', interface:'#7ea6ff', type:'#bd9cf5', module:'#e98fc1', namespace:'#74c8d8', property:'#a6d17a', constructor:'#f28fba' };
+let rawNodes=[], rawEdges=[], nodes=[], links=[], mode='dot', level='repository', matrixData=null, simulation=null, transform=zoomIdentity, activeNode=null, hoveredNode=null, highlightedPath=new Set(), labels=true, neighborFocus=true, includeIsolated=false, pixelRatio=1, width=1, height=1, dragNode=null, dragMoved=false, sourceEditor=null;
+let enabledRelations=new Set(Object.keys(relationColors)), enabledKinds=new Set();
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const light=()=>document.documentElement.dataset.theme==='light';
+const palette=()=>({text:light()?'#172033':'#edf2fa',muted:light()?'#64748b':'#8492a6',line:light()?'#cbd5e1':'#354052',panel:light()?'#fff':'#10141d'});
+function resize(){const r=canvas.getBoundingClientRect();width=r.width;height=r.height;pixelRatio=window.devicePixelRatio||1;canvas.width=Math.round(width*pixelRatio);canvas.height=Math.round(height*pixelRatio);draw();}
+function makeOverview(){const files=new Map(), modules=new Map(), nodeById=new Map(rawNodes.map(n=>[n.id,n]));for(const n of rawNodes){const path=n.filePath||'(unknown)';if(!files.has(path))files.set(path,{id:'file:'+path,name:path.split('/').pop()||path,path,kind:'file',filePath:path,count:0,symbols:[]});const f=files.get(path);f.count++;f.symbols.push(n);const parts=path.split('/');const modulePath=parts.length>1?parts.slice(0,-1).join('/'):'(root)';if(!modules.has(modulePath))modules.set(modulePath,{id:'module:'+modulePath,name:modulePath==='(root)'?'Root':modulePath.split('/').pop(),path:modulePath,kind:'module',fileCount:0,symbolCount:0,_files:new Set()});modules.get(modulePath).symbolCount+=1;modules.get(modulePath)._files.add(path);}
+ for(const module of modules.values()){module.fileCount=module._files.size;delete module._files;}
+ const edgeCounts=new Map();for(const e of rawEdges){const a=nodeById.get(e.source),b=nodeById.get(e.target);if(!a||!b)continue;const pa=a.filePath||'',pb=b.filePath||'';if(pa===pb)continue;const key=[pa,pb,e.kind].join('\u0000');edgeCounts.set(key,(edgeCounts.get(key)||0)+1);}
+ const moduleNodes=[...modules.values()], fileNodes=[...files.values()];const moduleByFile=new Map();for(const f of fileNodes){const mp=f.path.includes('/')?f.path.split('/').slice(0,-1).join('/'):'(root)';moduleByFile.set(f.path,mp);}
+ const moduleEdges=new Map();for(const [key,count] of edgeCounts){const [a,b,kind]=key.split('\u0000');const ma=moduleByFile.get(a),mb=moduleByFile.get(b);if(ma===mb)continue;const k=[ma,mb,kind].join('\u0000');moduleEdges.set(k,(moduleEdges.get(k)||0)+count);}
+ return {modules:moduleNodes,files:fileNodes,moduleEdges,fileEdges:edgeCounts};}
+let overview=null, currentModule=null, currentFile=null, forcedVisibleIds=null;
+function currentGraph(){if(level==='symbols'){let ns=rawNodes,es=rawEdges;if(currentFile)ns=ns.filter(n=>n.filePath===currentFile);else if(currentModule)ns=ns.filter(n=>(n.filePath||'').split('/').slice(0,-1).join('/')===currentModule);const ids=new Set(ns.map(n=>n.id));es=es.filter(e=>ids.has(e.source)&&ids.has(e.target));return {nodes:ns.map(n=>({...n,graphKind:'symbol'})),edges:es};}
+ if(currentFile){const ns=rawNodes.filter(n=>n.filePath===currentFile);const ids=new Set(ns.map(n=>n.id));return {nodes:ns.map(n=>({...n,graphKind:'symbol'})),edges:rawEdges.filter(e=>ids.has(e.source)&&ids.has(e.target))};}
+ if(currentModule){const ns=overview.files.filter(f=>(f.path.includes('/')?f.path.split('/').slice(0,-1).join('/'):'(root)')===currentModule);const ids=new Set(ns.map(n=>n.id));return {nodes:ns.map(n=>({...n,graphKind:'file'})),edges:[...overview.fileEdges].flatMap(([k,count])=>{const [a,b,kind]=k.split('\u0000');return ids.has('file:'+a)&&ids.has('file:'+b)?[{id:k,source:'file:'+a,target:'file:'+b,kind,count}]:[];})};}
+ const ns=overview.modules.map(n=>({...n,graphKind:'module'}));const ids=new Set(ns.map(n=>n.path));const edges=[...overview.moduleEdges].flatMap(([k,count])=>{const [a,b,kind]=k.split('\u0000');return ids.has(a)&&ids.has(b)?[{id:k,source:'module:'+a,target:'module:'+b,kind,count}]:[];});return {nodes:ns,edges};}
+function setLevel(next){level=next;currentModule=null;currentFile=null;forcedVisibleIds=null;activeNode=null;updateBreadcrumb();renderGraph();}
+function updateBreadcrumb(){$('level-repo').classList.toggle('active',level==='repository'&&!currentModule);$('level-symbols').classList.toggle('active',level==='symbols'&&!currentModule&&!currentFile);$('view-label').textContent=currentFile?'FILE':currentModule?'MODULE':level.toUpperCase();$('graph-hint').textContent=currentFile?'Showing symbols declared in '+currentFile+'.':currentModule?'Showing files in '+currentModule+'. Click a file to inspect its symbols.':'Click a module to drill into its files. Click a file to inspect its symbols. Scroll to zoom; drag to pan.';}
+function renderGraph(){if(simulation)simulation.stop();const g=currentGraph();let ns=g.nodes.filter(n=>n.graphKind!=='symbol'||enabledKinds.has(n.kind));const ids=new Set(ns.map(n=>n.id));let es=g.edges.filter(e=>ids.has(e.source)&&ids.has(e.target)&&enabledRelations.has(e.kind));const q=$('graph-search').value.trim().toLowerCase();if(q){let matches=ns.filter(n=>(n.name+' '+(n.path||n.filePath||'')).toLowerCase().includes(q));if(!matches.length&&level==='repository'&&!currentModule){const paths=new Set(rawNodes.filter(n=>(n.name+' '+n.filePath).toLowerCase().includes(q)).map(n=>n.filePath));matches=ns.filter(n=>[...paths].some(path=>(path.includes('/')?path.split('/').slice(0,-1).join('/'):'(root)')===n.path));}const matchIds=new Set(matches.map(n=>n.id));const neighborIds=new Set(matchIds);for(const e of es){if(matchIds.has(e.source))neighborIds.add(e.target);if(matchIds.has(e.target))neighborIds.add(e.source);}ns=ns.filter(n=>neighborIds.has(n.id));const visible=new Set(ns.map(n=>n.id));es=es.filter(e=>visible.has(e.source)&&visible.has(e.target));}if(forcedVisibleIds){ns=ns.filter(n=>forcedVisibleIds.has(n.id));const visible=new Set(ns.map(n=>n.id));es=es.filter(e=>visible.has(e.source)&&visible.has(e.target));}
+ if(!includeIsolated){const connected=new Set();for(const e of es){connected.add(e.source);connected.add(e.target);}if(es.length)ns=ns.filter(n=>connected.has(n.id)||n.graphKind==='module');}
+ nodes=ns;links=es.map(e=>({...e,source:e.source,target:e.target}));if(!nodes.length){$('status-text').textContent='No nodes match the current filters.';updateStats();draw();return;}
+ if(mode==='matrix'){loadMatrix();return;}if(mode==='hierarchical')applyHierarchical();else if(mode==='radial')applyRadial();else if(mode==='flow')applyFlow();else startSimulation();updateStats();draw();}
+function updateStats(){$('stat-nodes').textContent=nodes.length.toLocaleString();$('stat-edges').textContent=links.length.toLocaleString();$('stat-files').textContent=new Set(nodes.map(n=>n.filePath||n.path||'')).size.toLocaleString();$('status-text').textContent=`${nodes.length.toLocaleString()} nodes · ${links.length.toLocaleString()} relationships · ${level==='repository'?'Repository':currentModule||currentFile||'Symbols'}`;}
+function startSimulation(){if(simulation)simulation.stop();simulation=forceSimulation(nodes).force('link',forceLink(links).id(n=>n.id).distance(e=>e.count?Math.max(55,100-Math.log2(e.count)*5):85).strength(.35)).force('charge',forceManyBody().strength(n=>n.graphKind==='module'?-600:-190)).force('center',forceCenter(width/2,height/2)).force('collide',forceCollide(n=>n.graphKind==='module'?34:n.graphKind==='file'?22:15)).alpha(1).on('tick',draw);}
+function applyHierarchical(){const groups=new Map();for(const n of nodes){const key=n.graphKind==='module'?'Modules':n.graphKind==='file'?'Files':n.filePath||'Other';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(n);}let col=0;for(const group of groups.values()){group.forEach((n,i)=>{n.x=120+col*190;n.y=130+i*52;});col++;}draw();}
+function applyRadial(){const cx=width/2,cy=height/2,r=Math.min(width,height)*.34;nodes.forEach((n,i)=>{const a=2*Math.PI*i/nodes.length-Math.PI/2;n.x=cx+Math.cos(a)*r;n.y=cy+Math.sin(a)*r;});draw();}
+function applyFlow(){const indegree=new Map(nodes.map(n=>[n.id,0]));for(const e of links)indegree.set(e.target,(indegree.get(e.target)||0)+1);const max=Math.max(1,...indegree.values());const buckets=Array.from({length:Math.min(5,max+1)},()=>[]);nodes.forEach(n=>buckets[Math.min(buckets.length-1,indegree.get(n.id)||0)].push(n));buckets.forEach((b,i)=>b.forEach((n,j)=>{n.x=100+i*Math.max(140,(width-220)/Math.max(1,buckets.length-1));n.y=100+j*42;}));draw();}
+async function loadMatrix(){try{const r=await fetch(`/api/indexes/${encodeURIComponent(uid)}/graph/matrix`);matrixData=await r.json();draw();}catch(e){$('status-text').textContent='Could not load matrix: '+e.message;}}
+function draw(){ctx.setTransform(pixelRatio,0,0,pixelRatio,0,0);ctx.clearRect(0,0,width,height);ctx.save();ctx.translate(transform.x,transform.y);ctx.scale(transform.k,transform.k);if(mode==='matrix'&&matrixData)drawMatrix();else drawNetwork();ctx.restore();}
+function drawNetwork(){const p=palette();const selected=activeNode;const focusSet=new Set();if(selected&&neighborFocus){focusSet.add(selected.id);for(const e of links){if(e.source.id===selected.id)focusSet.add(e.target.id);if(e.target.id===selected.id)focusSet.add(e.source.id);}}
+ for(const e of links){const s=typeof e.source==='object'?e.source:nodes.find(n=>n.id===e.source),t=typeof e.target==='object'?e.target:nodes.find(n=>n.id===e.target);if(!s||!t)continue;const path=highlightedPath.has(s.name)&&highlightedPath.has(t.name);const dim=focusSet.size&&!focusSet.has(s.id)&&!focusSet.has(t.id);ctx.globalAlpha=dim?.08:path?.98:.42;ctx.strokeStyle=path?'#fff':relationColors[e.kind]||p.line;ctx.lineWidth=path?2.8:Math.min(3,1+Math.log2((e.count||1)+1)*.35);ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(t.x,t.y);ctx.stroke();if(transform.k>.65&&links.length<650){const a=Math.atan2(t.y-s.y,t.x-s.x),x=t.x-Math.cos(a)*nodeRadius(t),y=t.y-Math.sin(a)*nodeRadius(t);ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x-6*Math.cos(a-.45),y-6*Math.sin(a-.45));ctx.lineTo(x-6*Math.cos(a+.45),y-6*Math.sin(a+.45));ctx.closePath();ctx.fill();}}
+ for(const n of nodes){const selectedNow=selected?.id===n.id,hover=hoveredNode?.id===n.id,dim=focusSet.size&&!focusSet.has(n.id),radius=nodeRadius(n);ctx.globalAlpha=dim?.12:1;ctx.beginPath();ctx.arc(n.x,n.y,radius,0,Math.PI*2);ctx.fillStyle=n.graphKind==='module'?'#7ea6ff':n.graphKind==='file'?'#63d6b0':kindColors[n.kind]||'#f3bd69';ctx.fill();ctx.lineWidth=selectedNow||hover?2.5:1;ctx.strokeStyle=selectedNow?'#fff':hover?'#a8c4ff':p.line;ctx.stroke();if(n.graphKind==='module'||n.graphKind==='file'){ctx.beginPath();ctx.arc(n.x,n.y,radius+4,0,Math.PI*2);ctx.strokeStyle=n.graphKind==='module'?'#7ea6ff66':'#63d6b066';ctx.lineWidth=1;ctx.stroke();}if(labels&&(transform.k>.58||selectedNow||hover)){ctx.font=(selectedNow?'600 ':'')+(n.graphKind==='module'?'11':'10')+'px '+(n.graphKind==='symbol'?'ui-monospace,monospace':'Inter, sans-serif');ctx.fillStyle=selectedNow||hover?p.text:(transform.k<.8?p.muted:p.text);const label=n.graphKind==='module'?n.name:n.name;ctx.fillText(label,n.x+radius+5,n.y+3);if(n.count&&transform.k>.75){ctx.font='9px ui-monospace,monospace';ctx.fillStyle=p.muted;ctx.fillText(n.count+' symbols',n.x+radius+5,n.y+15);}}}
+ ctx.globalAlpha=1;}
+function nodeRadius(n){return n.graphKind==='module'?Math.min(19,10+Math.log2((n.fileCount||1)+1)*2):n.graphKind==='file'?Math.min(14,7+Math.log2((n.count||1)+1)):5.5;}
+function drawMatrix(){const d=matrixData;if(!d?.nodes?.length)return;const n=d.nodes.length,cell=Math.max(2,Math.min(18,(width-80)/(n+1)));ctx.font='9px ui-monospace,monospace';for(let i=0;i<n;i++){ctx.fillStyle=palette().muted;if(cell>7)ctx.fillText(d.nodes[i].name.slice(0,12),0,(i+1)*cell+cell*.7);for(let j=0;j<n;j++){const v=d.matrix[i][j];if(!v)continue;ctx.fillStyle='#63d6b0';ctx.globalAlpha=Math.min(.9,.25+v*.2);ctx.fillRect((j+1)*cell,(i+1)*cell,Math.max(1,cell-1),Math.max(1,cell-1));}}ctx.globalAlpha=1;}
+function findAt(x,y){for(let i=nodes.length-1;i>=0;i--){const n=nodes[i];if(Math.hypot(n.x-x,n.y-y)<=Math.max(10,nodeRadius(n)+4))return n;}return null;}
+function pointer(e){const r=canvas.getBoundingClientRect();return {x:(e.clientX-r.left-transform.x)/transform.k,y:(e.clientY-r.top-transform.y)/transform.k};}
+function selectNode(n){activeNode=n;if(!n){draw();return;}$('selected-name').textContent=n.name;$('selected-path').textContent=n.path||n.filePath||'';$('selected-kind').textContent=(n.graphKind||n.kind||'NODE').toUpperCase();$('detail-type').textContent=n.kind||n.graphKind||'—';$('detail-degree').textContent=links.filter(e=>e.source.id===n.id||e.target.id===n.id).length;$('detail-line').textContent=n.startLine||'—';$('detail-files').textContent=n.fileCount|| (n.graphKind==='file'?1:'—');const related=[];for(const e of links){const s=typeof e.source==='object'?e.source:nodes.find(x=>x.id===e.source),t=typeof e.target==='object'?e.target:nodes.find(x=>x.id===e.target);if(s?.id===n.id&&t)related.push({node:t,kind:e.kind,direction:'out'});else if(t?.id===n.id&&s)related.push({node:s,kind:e.kind,direction:'in'});}const list=$('connected-list');list.replaceChildren();if(!related.length)list.innerHTML='<div class="empty">No visible connections. Try expanding neighbors or changing filters.</div>';else related.slice(0,80).forEach(r=>{const b=document.createElement('button');b.className='list-item';b.textContent=(r.direction==='in'?'← ':'→ ')+r.node.name;const sm=document.createElement('small');sm.textContent=r.kind+' · '+(r.node.path||r.node.filePath||'');b.append(sm);b.addEventListener('click',()=>{selectNode(r.node);focusNode(r.node);});list.append(b);});draw();}
+function focusNode(n){if(!n)return;const k=Math.max(transform.k,1);transform=zoomIdentity.translate(width/2-n.x*k,height/2-n.y*k).scale(k);select(canvas).call(zoomBehavior.transform,transform);}
+function drill(n){if(!n)return;if(n.graphKind==='module'){currentModule=n.path;currentFile=null;level='repository';}else if(n.graphKind==='file'){currentFile=n.filePath||n.path;currentModule=null;level='symbols';}else if(n.graphKind==='symbol'){selectNode(n);return;}updateBreadcrumb();activeNode=null;renderGraph();}
+function fit(){if(!nodes.length)return;const xs=nodes.map(n=>n.x),ys=nodes.map(n=>n.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);const pad=90,k=Math.max(.12,Math.min(1.5,(width-pad*2)/Math.max(1,maxX-minX),(height-pad*2)/Math.max(1,maxY-minY)));transform=zoomIdentity.translate(width/2-(minX+maxX)/2*k,height/2-(minY+maxY)/2*k).scale(k);select(canvas).call(zoomBehavior.transform,transform);}
+const zoomBehavior=zoom().scaleExtent([.12,5]).on('zoom',e=>{transform=e.transform;draw();});select(canvas).call(zoomBehavior);
+canvas.addEventListener('pointerdown',e=>{const p=pointer(e),n=findAt(p.x,p.y);if(n){dragNode=n;dragMoved=false;if(simulation)simulation.alphaTarget(.2).restart();canvas.setPointerCapture(e.pointerId);}else{dragNode=null;}});
+canvas.addEventListener('pointermove',e=>{const p=pointer(e);if(dragNode){dragMoved=true;dragNode.fx=p.x;dragNode.fy=p.y;draw();return;}const n=findAt(p.x,p.y);if(n!==hoveredNode){hoveredNode=n;canvas.style.cursor=n?'pointer':'grab';draw();}});
+canvas.addEventListener('pointerup',e=>{if(dragNode){const n=dragNode;dragNode=null;if(simulation)simulation.alphaTarget(0);if(!dragMoved){if(n.graphKind==='module'||n.graphKind==='file')drill(n);else selectNode(n);}else{n.fx=null;n.fy=null;}dragMoved=false;}});
+canvas.addEventListener('dblclick',e=>{const p=pointer(e),n=findAt(p.x,p.y);if(n)drill(n);});
+canvas.addEventListener('pointerleave',()=>{hoveredNode=null;draw();});
+function addFilters(){const rel=$('relation-filters'),kinds=$('kind-filters');rel.replaceChildren();for(const kind of Object.keys(relationColors)){const label=document.createElement('label');label.className='check';const input=document.createElement('input');input.type='checkbox';input.checked=true;input.addEventListener('change',()=>{input.checked?enabledRelations.add(kind):enabledRelations.delete(kind);renderGraph();});label.append(input,document.createTextNode(kind));rel.append(label);}const allKinds=[...new Set(rawNodes.map(n=>n.kind))].sort();enabledKinds=new Set(allKinds);kinds.replaceChildren();for(const kind of allKinds){const label=document.createElement('label');label.className='check';const input=document.createElement('input');input.type='checkbox';input.checked=true;input.addEventListener('change',()=>{input.checked?enabledKinds.add(kind):enabledKinds.delete(kind);renderGraph();});label.append(input,document.createTextNode(kind));kinds.append(label);}}
+$('graph-search').addEventListener('input',()=>{forcedVisibleIds=null;renderGraph();});$('level-repo').addEventListener('click',()=>{level='repository';currentModule=null;currentFile=null;forcedVisibleIds=null;activeNode=null;updateBreadcrumb();renderGraph();});$('level-symbols').addEventListener('click',()=>setLevel('symbols'));
+document.querySelectorAll('.mode-btn[data-mode]').forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.mode;document.querySelectorAll('.mode-btn[data-mode]').forEach(x=>x.classList.toggle('active',x===b));renderGraph();}));
+$('btn-theme').addEventListener('click',()=>{document.documentElement.dataset.theme=light()?'dark':'light';localStorage.setItem('codebase_theme',document.documentElement.dataset.theme);draw();});$('btn-fit').addEventListener('click',fit);$('btn-labels').addEventListener('click',()=>{labels=!labels;$('btn-labels').textContent=labels?'Labels on':'Labels off';$('btn-labels').classList.toggle('active',labels);draw();});$('btn-neighbors').addEventListener('click',()=>{neighborFocus=!neighborFocus;$('btn-neighbors').classList.toggle('active',neighborFocus);draw();});$('btn-isolated').addEventListener('click',()=>{includeIsolated=!includeIsolated;$('btn-isolated').classList.toggle('active',includeIsolated);renderGraph();});$('btn-focus').addEventListener('click',()=>focusNode(activeNode));$('btn-expand').addEventListener('click',()=>{if(!activeNode)return;const ids=new Set([activeNode.id]);for(const e of rawEdges){if(e.source===activeNode.id)ids.add(e.target);if(e.target===activeNode.id)ids.add(e.source);}forcedVisibleIds=ids;level='symbols';currentFile=null;currentModule=null;updateBreadcrumb();renderGraph();});
+$('btn-cycles').addEventListener('click',async()=>{try{const r=await fetch(`/api/indexes/${encodeURIComponent(uid)}/graph/cycles`),d=await r.json(),cycles=d.cycles||[];if(!cycles.length){$('status-text').textContent='No dependency cycles detected.';return;}highlightedPath=new Set(cycles[0].symbols||[]);$('status-text').textContent=`Found ${cycles.length} cycle(s); highlighting the first.`;draw();}catch(e){$('status-text').textContent='Cycle analysis failed: '+e.message;}});
+$('btn-find-path').addEventListener('click',async()=>{const from=$('path-from').value.trim(),to=$('path-to').value.trim();if(!from||!to)return;try{const r=await fetch(`/api/indexes/${encodeURIComponent(uid)}/graph/path?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),d=await r.json();highlightedPath=new Set(d.nodes||[]);$('path-result').textContent=d.depth===undefined?'No path found.':`Path: ${d.depth} hops · ${(d.nodes||[]).join(' → ')}`;draw();}catch(e){$('path-result').textContent='Path lookup failed: '+e.message;}});
+$('btn-source').addEventListener('click',async()=>{const file=activeNode?.filePath||activeNode?.path;if(!file||activeNode.graphKind==='module')return;try{const r=await fetch(`/api/indexes/${encodeURIComponent(uid)}/source?path=${encodeURIComponent(file)}`);if(!r.ok)throw new Error('Source unavailable');const d=await r.json();$('source-title').textContent=d.path;$('source-dock').classList.add('open');if(window.require){require(['vs/editor/editor.main'],()=>{if(sourceEditor)sourceEditor.dispose();sourceEditor=monaco.editor.create($('source-editor'),{value:d.content,language:d.language||'plaintext',readOnly:true,theme:light()?'vs':'vs-dark',minimap:{enabled:false},automaticLayout:true,scrollBeyondLastLine:false});const line=activeNode.startLine||1;sourceEditor.revealLineInCenter(line);sourceEditor.setPosition({lineNumber:line,column:1});});}}catch(e){$('status-text').textContent=e.message;}});$('source-close').addEventListener('click',()=>$('source-dock').classList.remove('open'));
+window.addEventListener('resize',resize);const savedTheme=localStorage.getItem('codebase_theme');if(savedTheme)document.documentElement.dataset.theme=savedTheme;resize();
+fetch(`/api/indexes/${encodeURIComponent(uid)}?all=true`).then(r=>{if(!r.ok)throw new Error('Unable to load graph');return r.json();}).then(payload=>{rawNodes=payload.graph.nodes||[];rawEdges=payload.graph.edges||[];overview=makeOverview();$('workspace-name').textContent=payload.metadata.workspaceRoot.split('/').pop()||'Workspace';$('workspace-path').textContent=payload.metadata.workspaceRoot;addFilters();updateBreadcrumb();renderGraph();setTimeout(fit,250);}).catch(e=>{$('status-text').textContent='Graph loading failed: '+e.message;});

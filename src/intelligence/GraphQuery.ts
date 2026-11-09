@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { IndexSnapshot } from '../storage/IndexFormat.js';
 import type { RelationKind, RelationRecord } from '../types/Relation.js';
 
@@ -41,6 +42,138 @@ export interface RadialGraph {
 export interface FlowGraph {
   nodes: Array<{ id: string; name: string; kind: string; level: number }>;
   edges: Array<{ source: string; target: string; kind: string }>;
+}
+
+
+export interface ChangeImpactResult {
+  query: string;
+  matchedFiles: string[];
+  matchedSymbols: Array<{ name: string; filePath: string; kind: string }>;
+  affectedFiles: Array<{ filePath: string; impact: 'direct' | 'transitive'; depth: number; confidence: number; reasons: string[] }>;
+  affectedSymbols: Array<{ name: string; filePath: string; kind: string; depth: number }>;
+  risk: 'low' | 'medium' | 'high' | 'unknown';
+  ambiguous: boolean;
+  caveats: string[];
+}
+
+/** Estimates the blast radius of changing a file or symbol using symbol and file dependency graphs. */
+export function analyzeChangeImpact(snapshot: IndexSnapshot, query: string, maxDepth = 3): ChangeImpactResult {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) throw new Error('A file path or symbol name is required');
+  const depthLimit = Math.max(1, Math.min(8, Math.floor(maxDepth)));
+  const matchedFiles = snapshot.files.filter((file) =>
+    file.path.toLowerCase() === normalized || file.path.toLowerCase().endsWith(`/${normalized}`)
+  );
+  const exactSymbols = snapshot.symbols.filter((symbol) => symbol.name.toLowerCase() === normalized);
+  const matchedSymbols = matchedFiles.length > 0
+    ? snapshot.symbols.filter((symbol) => matchedFiles.some((file) => file.path === symbol.filePath))
+    : exactSymbols;
+  const matchedFilePaths = new Set(matchedFiles.map((file) => file.path));
+  for (const symbol of exactSymbols) matchedFilePaths.add(symbol.filePath);
+  if (matchedFilePaths.size === 0 && normalized.includes('/')) {
+    for (const file of snapshot.files) {
+      if (file.path.toLowerCase().includes(normalized)) matchedFilePaths.add(file.path);
+    }
+  }
+
+  const impacted = new Map<string, { depth: number; confidence: number; reasons: Set<string> }>();
+  const addImpact = (filePath: string, depth: number, confidence: number, reason: string) => {
+    if (matchedFilePaths.has(filePath)) return;
+    const existing = impacted.get(filePath) ?? { depth, confidence, reasons: new Set<string>() };
+    existing.depth = Math.min(existing.depth, depth);
+    existing.confidence = Math.max(existing.confidence, confidence);
+    existing.reasons.add(reason);
+    impacted.set(filePath, existing);
+  };
+
+  // File-level import graph catches module dependencies even when an import has no symbol binding.
+  const fileIncoming = new Map<string, Array<{ filePath: string; confidence: number; target: string; line: number }>>();
+  const indexedPaths = new Set(snapshot.files.map((file) => file.path));
+  for (const relation of snapshot.relations) {
+    if (relation.kind !== 'imports') continue;
+    const targetFile = resolveIndexedImport(relation.filePath, relation.targetName, indexedPaths);
+    if (!targetFile || targetFile === relation.filePath) continue;
+    const incoming = fileIncoming.get(targetFile) ?? [];
+    incoming.push({ filePath: relation.filePath, confidence: relation.confidence, target: relation.targetName, line: relation.line });
+    fileIncoming.set(targetFile, incoming);
+  }
+  const fileDepth = new Map<string, number>();
+  let fileFrontier = new Set(matchedFilePaths);
+  for (let depth = 1; depth <= depthLimit && fileFrontier.size > 0; depth++) {
+    const next = new Set<string>();
+    for (const targetFile of fileFrontier) {
+      for (const incoming of fileIncoming.get(targetFile) ?? []) {
+        if (fileDepth.has(incoming.filePath)) continue;
+        fileDepth.set(incoming.filePath, depth);
+        addImpact(incoming.filePath, depth, incoming.confidence, `imports ${incoming.target} (line ${incoming.line})`);
+        next.add(incoming.filePath);
+      }
+    }
+    fileFrontier = next;
+  }
+
+  // Symbol-level traversal adds callers, references, inheritance, and other resolved relations.
+  const symbolById = new Map(snapshot.symbols.map((symbol) => [symbol.id, symbol]));
+  const frontier = new Set<string>(matchedSymbols.map((symbol) => symbol.id));
+  const symbolsByFile = new Map<string, string[]>();
+  for (const symbol of snapshot.symbols) {
+    const ids = symbolsByFile.get(symbol.filePath) ?? [];
+    ids.push(symbol.id);
+    symbolsByFile.set(symbol.filePath, ids);
+  }
+  for (const filePath of matchedFilePaths) {
+    for (const id of symbolsByFile.get(filePath) ?? []) frontier.add(id);
+  }
+  let symbolFrontier = frontier;
+  const visitedSymbols = new Set(frontier);
+  for (let depth = 1; depth <= depthLimit && symbolFrontier.size > 0; depth++) {
+    const next = new Set<string>();
+    for (const relation of snapshot.relations) {
+      if (!relation.toSymbolId || !symbolFrontier.has(relation.toSymbolId) || !relation.fromSymbolId) continue;
+      const source = symbolById.get(relation.fromSymbolId);
+      if (!source || visitedSymbols.has(source.id)) continue;
+      if (['contains', 'exports', 'exported-by', 'imported-by', 'called-by', 'referenced-by', 'extended-by', 'implemented-by', 'dependent-on', 'overridden-by'].includes(relation.kind)) continue;
+      addImpact(relation.filePath, depth, relation.confidence, `${relation.kind}: ${relation.targetName} (line ${relation.line})`);
+      next.add(source.id);
+    }
+    for (const id of next) visitedSymbols.add(id);
+    symbolFrontier = next;
+  }
+
+  const affectedFiles = [...impacted.entries()].map(([filePath, item]) => ({
+    filePath,
+    impact: (item.depth === 1 ? 'direct' : 'transitive') as 'direct' | 'transitive',
+    depth: item.depth,
+    confidence: Number(item.confidence.toFixed(2)),
+    reasons: [...item.reasons].slice(0, 8)
+  })).sort((a, b) => a.depth - b.depth || b.confidence - a.confidence || a.filePath.localeCompare(b.filePath));
+  const affectedPathSet = new Set(affectedFiles.map((item) => item.filePath));
+  const affectedSymbols = snapshot.symbols.filter((symbol) => affectedPathSet.has(symbol.filePath)).map((symbol) => ({
+    name: symbol.name, filePath: symbol.filePath, kind: symbol.kind,
+    depth: impacted.get(symbol.filePath)?.depth ?? 1
+  }));
+  const hasLowConfidence = affectedFiles.some((item) => item.confidence < 0.6);
+  const ambiguous = exactSymbols.length > 1 && matchedFiles.length === 0;
+  const risk = matchedFilePaths.size === 0 ? 'unknown'
+    : affectedFiles.length >= 10 || affectedFiles.some((item) => item.depth > 1) ? 'high'
+    : affectedFiles.length >= 3 ? 'medium' : 'low';
+  const caveats = [
+    'This is a static estimate from indexed relations, not a proof of runtime impact.',
+    'Dynamic imports, reflection, dependency injection, generated code, unresolved imports, and external consumers may be missing.'
+  ];
+  if (matchedFilePaths.size === 0) caveats.unshift('No exact indexed file or symbol match was found; refine the query to a file path or symbol name.');
+  if (ambiguous) caveats.unshift(`The symbol name matches ${exactSymbols.length} definitions; results include dependents of every matching definition. Use a file path to disambiguate.`);
+  if (hasLowConfidence) caveats.push('Some affected edges have low parser/resolution confidence.');
+  return {
+    query,
+    matchedFiles: [...matchedFilePaths].sort(),
+    matchedSymbols: matchedSymbols.map(({ name, filePath, kind }) => ({ name, filePath, kind })),
+    affectedFiles,
+    affectedSymbols,
+    risk,
+    ambiguous,
+    caveats
+  };
 }
 
 export function findSymbolPath(snapshot: IndexSnapshot, fromName: string, toName: string, options: GraphQueryOptions = {}): GraphPathResult {
@@ -102,6 +235,17 @@ export function findSymbolPath(snapshot: IndexSnapshot, fromName: string, toName
   }
 
   return { nodes: [...startIds].map((id) => symbolById.get(id) ?? id).slice(0, maxNodes), edges: [], depth: 0 };
+}
+
+function resolveIndexedImport(fromFile: string, specifier: string, indexedPaths: Set<string>): string | undefined {
+  if (!specifier.startsWith('.')) return undefined;
+  const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), specifier));
+  const candidates = [base];
+  if (!path.posix.extname(base)) {
+    for (const extension of ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs']) candidates.push(`${base}${extension}`);
+    for (const extension of ['.ts', '.tsx', '.js', '.jsx']) candidates.push(`${base}/index${extension}`);
+  }
+  return candidates.find((candidate) => indexedPaths.has(candidate));
 }
 
 export function findDependencyRelations(snapshot: IndexSnapshot, query: string, reverse = false, depth = 1): RelationRecord[] {

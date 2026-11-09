@@ -46,6 +46,17 @@ test('dashboard serves index summaries, resolved graph data, and cross-index sea
     assert.equal(indexPayload.indexes[0]?.metadata.fileCount, 1);
 
     const uid = indexPayload.indexes[0]!.metadata.uid;
+    const chunksResponse = await fetch(`${baseUrl}/api/indexes/${uid}/chunks?limit=2`);
+    const chunksPayload = await chunksResponse.json() as { chunks: Array<{ text: string; filePath: string; startLine: number; hash: string }>; total: number; nextOffset: number };
+    assert.ok(chunksPayload.total > 2);
+    assert.equal(chunksPayload.chunks.length, 2);
+    assert.equal(chunksPayload.nextOffset, 2);
+    assert.ok(chunksPayload.chunks[0]?.hash);
+    assert.ok(chunksPayload.chunks[0]?.text);
+    const filteredChunksResponse = await fetch(`${baseUrl}/api/indexes/${uid}/chunks?q=authenticate`);
+    const filteredChunks = await filteredChunksResponse.json() as { chunks: Array<{ text: string }>; total: number };
+    assert.ok(filteredChunks.total > 0);
+    assert.ok(filteredChunks.chunks.every((chunk) => chunk.text.toLowerCase().includes('authenticate')));
     const graphResponse = await fetch(`${baseUrl}/api/indexes/${uid}`);
     const graphPayload = await graphResponse.json() as {
       metadata: { symbolCount: number };
@@ -90,7 +101,8 @@ test('dashboard serves index summaries, resolved graph data, and cross-index sea
     const graphClientResponse = await fetch(`${baseUrl}/assets/graph-client.js`);
     assert.equal(graphClientResponse.status, 200);
     assert.match(graphClientResponse.headers.get('content-type') ?? '', /javascript/u);
-    assert.ok((await graphClientResponse.text()).length > 10_000);
+    const graphClient = await graphClientResponse.text();
+    assert.ok(graphClient.length > 10_000);
     for (const asset of ['loader.js', 'editor/editor.main.js', 'editor/editor.worker.js']) {
       const monacoAssetResponse = await fetch(`${baseUrl}/assets/monaco/vs/${asset}`);
       assert.equal(monacoAssetResponse.status, 200, `missing Monaco asset ${asset}`);
@@ -224,6 +236,135 @@ test('dashboard groups repository index parts and searches them as one collectio
       await once(server, 'close');
     }
   } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+test('dashboard test runner executes the indexed workspace npm test script and returns output', async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'codebase-indexer-dashboard-test-runner-'));
+  const workspace = path.join(temporary, 'workspace');
+  const indexDir = path.join(temporary, 'indexes');
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, 'package.json'), JSON.stringify({
+    name: 'dashboard-runner-fixture',
+    version: '1.0.0',
+    scripts: { test: 'node -e "console.log(\\"dashboard-runner-ok\\")"' }
+  }));
+  await writeFile(path.join(workspace, 'source.ts'), 'export const runnerFixture = true;\n');
+  const manager = await IndexManager.create({ workspacePath: workspace, indexDir });
+  await manager.index();
+  const server = createDashboardApp(indexDir).listen(0, '127.0.0.1');
+  try {
+    await once(server, 'listening');
+    const address = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const page = await (await fetch(baseUrl)).text();
+    assert.match(page, /id="run-tests-button"/u);
+    assert.match(page, /Run full test suite/u);
+    const indexes = await (await fetch(`${baseUrl}/api/indexes`)).json() as {
+      indexes: Array<{ metadata: { uid: string } }>;
+    };
+    const uid = indexes.indexes[0]!.metadata.uid;
+    const response = await fetch(`${baseUrl}/api/indexes/${uid}/tests/run`, { method: 'POST' });
+    assert.equal(response.status, 200);
+    const result = await response.json() as { ok: boolean; command: string; stdout: string; exitCode: number; durationMs: number };
+    assert.equal(result.ok, true);
+    assert.equal(result.command, 'npm test');
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout, /dashboard-runner-ok/u);
+    assert.ok(result.durationMs >= 0);
+
+    const invalidUid = await fetch(`${baseUrl}/api/indexes/not-a-uid/tests/run`, { method: 'POST' });
+    assert.equal(invalidUid.status, 400);
+  } finally {
+    server.close();
+    await once(server, 'close');
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test('dashboard tests EmbeddingGemma inference and generates vectors for the selected index', async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'codebase-indexer-dashboard-embeddings-'));
+  const workspace = path.join(temporary, 'workspace');
+  const indexDir = path.join(temporary, 'indexes');
+  await mkdir(workspace, { recursive: true });
+  await writeFile(path.join(workspace, 'auth.ts'), 'export function authenticate(token: string) { return validateSession(token); }\n');
+  const manager = await IndexManager.create({ workspacePath: workspace, indexDir });
+  await manager.index();
+  const server = createDashboardApp(indexDir, {
+    embeddingProviderFactory: (options) => {
+      const dimensions = options.dimensions ?? 256;
+      const vector = Array.from({ length: dimensions }, (_, index) => index === 0 ? 1 : 0);
+      return {
+        id: `embeddinggemma-2:onnx:onnx-community/embeddinggemma-2-ONNX:q8:${dimensions}`,
+        dimensions: () => dimensions,
+        embed: async () => vector,
+        embedBatch: async (texts) => texts.map(() => vector),
+        embedChunks: async (chunks) => chunks.map(() => vector)
+      };
+    }
+  }).listen(0, '127.0.0.1');
+  try {
+    await once(server, 'listening');
+    const address = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const page = await (await fetch(baseUrl)).text();
+    assert.match(page, /data-target="panel-embeddings"/u);
+    assert.match(page, /id="embedding-test-button"/u);
+    assert.match(page, /id="embedding-generate-button"/u);
+    assert.match(page, /id="embedding-search-button"/u);
+    const indexes = await (await fetch(`${baseUrl}/api/indexes`)).json() as { indexes: Array<{ metadata: { uid: string } }> };
+    const uid = indexes.indexes[0]!.metadata.uid;
+
+    const invalid = await fetch(`${baseUrl}/api/indexes/${uid}/embeddings/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dimensions: 999 })
+    });
+    assert.equal(invalid.status, 400);
+
+    const testResponse = await fetch(`${baseUrl}/api/indexes/${uid}/embeddings/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'where is authentication?', dimensions: 256, dtype: 'q8' })
+    });
+    assert.equal(testResponse.status, 200);
+    const testResult = await testResponse.json() as { ok: boolean; device: string; dimensions: number; sampleFile: string; cosineSimilarity: number };
+    assert.equal(testResult.ok, true);
+    assert.equal(testResult.device, 'cpu');
+    assert.equal(testResult.dimensions, 256);
+    assert.equal(testResult.sampleFile, 'auth.ts');
+    assert.equal(testResult.cosineSimilarity, 1);
+
+    const generateResponse = await fetch(`${baseUrl}/api/indexes/${uid}/embeddings/generate`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dimensions: 256, dtype: 'q8' })
+    });
+    assert.equal(generateResponse.status, 202);
+    const started = await generateResponse.json() as { jobId: string; status: string };
+    assert.equal(started.status, 'running');
+    let job: { status: string; result?: { ok: boolean; vectorCount: number; provider: string }; error?: string } | undefined;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const jobResponse = await fetch(`${baseUrl}/api/embedding-jobs/${started.jobId}`);
+      assert.equal(jobResponse.status, 200);
+      job = await jobResponse.json() as typeof job;
+      if (job && job.status !== 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(job?.status, 'completed', job?.error);
+    const generated = job?.result;
+    assert.ok(generated?.ok);
+    assert.ok((generated?.vectorCount ?? 0) > 0);
+    const updated = await manager.read();
+    assert.equal(updated.metadata.embeddingProvider, generated.provider);
+    assert.equal(updated.metadata.embeddingDimensions, 256);
+    assert.equal(updated.vectors.length, generated.vectorCount);
+
+    const semanticResponse = await fetch(`${baseUrl}/api/indexes/${uid}/embeddings/search`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query: 'authentication session validation', limit: 5 })
+    });
+    assert.equal(semanticResponse.status, 200);
+    const semantic = await semanticResponse.json() as { ok: boolean; resultCount: number; results: Array<{ path: string; score: number }> };
+    assert.equal(semantic.ok, true);
+    assert.ok(semantic.resultCount > 0);
+    assert.equal(semantic.results[0]?.path, 'auth.ts');
+  } finally {
+    server.close();
+    await once(server, 'close');
     await rm(temporary, { recursive: true, force: true });
   }
 });

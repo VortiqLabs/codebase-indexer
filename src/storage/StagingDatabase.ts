@@ -34,6 +34,11 @@ export class StagingDatabase {
         modifiedAt REAL,
         terms TEXT
       );
+      CREATE TABLE IF NOT EXISTS file_terms (
+        filePath TEXT NOT NULL,
+        term TEXT NOT NULL,
+        PRIMARY KEY (filePath, term)
+      );
       CREATE TABLE IF NOT EXISTS symbols (
         id TEXT PRIMARY KEY,
         filePath TEXT,
@@ -73,6 +78,7 @@ export class StagingDatabase {
         "values" TEXT
       );
 
+      CREATE INDEX IF NOT EXISTS idx_file_terms_term_path ON file_terms(term, filePath);
       CREATE INDEX IF NOT EXISTS idx_symbols_filePath ON symbols(filePath);
       CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
       CREATE INDEX IF NOT EXISTS idx_symbols_name_path ON symbols(name, filePath);
@@ -111,9 +117,13 @@ export class StagingDatabase {
   insertFilesBatch(files: FileRecord[]): void {
     if (files.length === 0) return;
     const stmt = this.db.prepare('INSERT OR REPLACE INTO files (path, language, hash, size, modifiedAt, terms) VALUES (?, ?, ?, ?, ?, ?)');
+    const deleteTerms = this.db.prepare('DELETE FROM file_terms WHERE filePath = ?');
+    const insertTerm = this.db.prepare('INSERT OR IGNORE INTO file_terms (filePath, term) VALUES (?, ?)');
     this.db.exec('BEGIN TRANSACTION');
     for (const f of files) {
       stmt.run(f.path, f.language, f.hash, f.size, f.modifiedAt, JSON.stringify(f.terms));
+      deleteTerms.run(f.path);
+      for (const term of new Set(f.terms.map((value) => value.toLowerCase()))) insertTerm.run(f.path, term);
     }
     this.db.exec('COMMIT');
   }
@@ -163,19 +173,31 @@ export class StagingDatabase {
     this.db.exec('BEGIN TRANSACTION');
     const delFiles = this.db.prepare('DELETE FROM files WHERE path = ?');
     const delSymbols = this.db.prepare('DELETE FROM symbols WHERE filePath = ?');
+    const delTerms = this.db.prepare('DELETE FROM file_terms WHERE filePath = ?');
     const delRelations = this.db.prepare('DELETE FROM relations WHERE filePath = ?');
+    const delVectors = this.db.prepare('DELETE FROM vectors WHERE chunkId IN (SELECT id FROM chunks WHERE filePath = ?)');
     const delChunks = this.db.prepare('DELETE FROM chunks WHERE filePath = ?');
     for (const p of filePaths) {
       delFiles.run(p);
+      delTerms.run(p);
       delSymbols.run(p);
       delRelations.run(p);
+      delVectors.run(p);
       delChunks.run(p);
     }
     this.db.exec('COMMIT');
   }
 
-  resolveRelations(): void {
+  /** Revalidates only dangling graph edges, then resolves newly inserted or invalidated relations. */
+  resolveRelations(): { invalidated: number; resolved: number } {
     this.db.exec('BEGIN TRANSACTION');
+    const before = this.db.prepare('SELECT COUNT(*) AS count FROM relations WHERE toSymbolId IS NULL').get() as { count: number };
+    const invalidated = Number(this.db.prepare(`
+      UPDATE relations
+      SET toSymbolId = NULL, confidence = MIN(confidence, 0.5)
+      WHERE toSymbolId IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM symbols s WHERE s.id = relations.toSymbolId)
+    `).run().changes);
     this.db.exec(`
       UPDATE relations
       SET toSymbolId = (
@@ -184,7 +206,7 @@ export class StagingDatabase {
         LIMIT 1
       ),
       confidence = 0.9
-      WHERE toSymbolId IS NULL AND kind IN ('calls', 'imports', 'extends', 'implements', 'contains') AND EXISTS (
+      WHERE toSymbolId IS NULL AND kind IN ('calls', 'extends', 'implements', 'contains') AND EXISTS (
         SELECT 1 FROM symbols s WHERE s.name = relations.targetName AND s.filePath = relations.filePath
       );
 
@@ -195,7 +217,7 @@ export class StagingDatabase {
         LIMIT 1
       ),
       confidence = 0.72
-      WHERE toSymbolId IS NULL AND kind IN ('calls', 'imports', 'extends', 'implements', 'contains') AND EXISTS (
+      WHERE toSymbolId IS NULL AND kind IN ('calls', 'extends', 'implements', 'contains') AND EXISTS (
         SELECT 1 FROM symbols s WHERE s.name = relations.targetName
       );
 
@@ -209,7 +231,7 @@ export class StagingDatabase {
         LIMIT 1
       ),
       confidence = 0.72
-      WHERE toSymbolId IS NULL AND kind IN ('calls', 'imports', 'extends', 'implements', 'contains') AND EXISTS (
+      WHERE toSymbolId IS NULL AND kind IN ('calls', 'extends', 'implements', 'contains') AND EXISTS (
         SELECT 1 FROM symbols s
         WHERE s.name = relations.targetName
            OR s.name = relations.normalizedTargetName
@@ -217,7 +239,9 @@ export class StagingDatabase {
            OR s.filePath LIKE '%/' || relations.normalizedTargetName || '.js'
       );
     `);
+    const after = this.db.prepare('SELECT COUNT(*) AS count FROM relations WHERE toSymbolId IS NULL').get() as { count: number };
     this.db.exec('COMMIT');
+    return { invalidated, resolved: Math.max(0, Number(before.count) + Number(invalidated) - Number(after.count)) };
   }
 
   getCounts(): { files: number; symbols: number; relations: number; chunks: number; vectors: number } {

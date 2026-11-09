@@ -14,37 +14,62 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js"
+    },
+    "./api": {
+      "types": "./dist/src/api.d.ts",
+      "import": "./dist/src/api.js"
+    },
+    "./embeddings": {
+      "types": "./dist/src/embeddings/index.d.ts",
+      "import": "./dist/src/embeddings/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/src/mcp/index.d.ts",
+      "import": "./dist/src/mcp/index.js"
+    },
+    "./types": {
+      "types": "./dist/src/types/index.d.ts",
+      "import": "./dist/src/types/index.js"
     }
   },
   "files": [
     "dist/src",
     "dist/bin",
-    "dist/dashboard"
+    "dist/dashboard",
+    "dist/webview"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-   "build": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs",
     "test": "npm run build && node --test dist/tests/*.test.js"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "@litert-lm/core": "^0.19.0",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "@msgpack/msgpack": "^3.1.2",
     "express": "^5.2.1",
+    "highlight.js": "^11.12.0",
     "ignore": "^7.0.5",
+    "lucide": "^1.70.0",
     "monaco-editor": "^0.57.0",
+    "simple-icons": "^16.37.0",
     "tar": "^7.5.22",
     "tree-sitter-wasms": "^0.1.13",
     "web-tree-sitter": "^0.25.10",
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@types/d3": "^7.4.3",
     "@types/express": "^5.0.6",
     "@types/node": "^24.19.0",
-    "@types/d3": "^7.4.3",
     "d3": "^7.9.0",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.0"
+  },
+  "allowScripts": {
+    "onnxruntime-node@1.30.0": true
   }
 }

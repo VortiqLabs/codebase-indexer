@@ -4,10 +4,11 @@ import type { IndexSnapshot } from '../storage/IndexFormat.js';
 import { detectApiEndpoints, detectDatabaseSchema, detectTestIntelligence, detectConfigAndDocIntelligence } from '../intelligence/ApiDetector.js';
 import { buildRepositoryMap, analyzeComplexity, detectDuplicates } from '../intelligence/RepositoryMap.js';
 import { findGraphCycles, getMatrixGraph, getRadialGraph, getFlowGraph, findSymbolPath } from '../intelligence/GraphQuery.js';
+import { analyzeArchitecture } from '../intelligence/ArchitectureAnalyzer.js';
 
 interface WorkerRequest {
   filePath: string;
-  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence' | 'cycles' | 'matrix' | 'radial' | 'flow' | 'complexity' | 'duplicates' | 'database' | 'tests' | 'configDoc' | 'path';
+  operation: 'summary' | 'graph' | 'search' | 'file' | 'intelligence' | 'cycles' | 'matrix' | 'radial' | 'flow' | 'complexity' | 'duplicates' | 'database' | 'tests' | 'configDoc' | 'path' | 'architecture';
   all?: boolean;
   query?: string;
   limit?: number;
@@ -42,6 +43,9 @@ async function main(): Promise<void> {
         break;
       case 'path':
         value = findSymbolPath(snapshot, request.from ?? '', request.to ?? '');
+        break;
+      case 'architecture':
+        value = await analyzeArchitecture(snapshot);
         break;
       case 'complexity':
         value = analyzeComplexity(snapshot);

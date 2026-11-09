@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -19,6 +19,12 @@ test('incremental indexing reuses unchanged records and applies add, change, and
     assert.equal(initial.added, 2);
     assert.equal(initial.unchanged, 0);
     assert.equal(path.basename(initial.indexPath), `${manager.uid}.index`);
+    await stat(manager.queryDatabasePath);
+    assert.equal((await manager.findSymbol('alpha')).length, 1, 'symbol lookup should use the SQLite query store');
+    assert.equal((await manager.getFile('a.ts'))?.path, 'a.ts');
+    await rm(manager.queryDatabasePath);
+    assert.equal((await manager.search('alpha'))[0]?.file.path, 'a.ts', 'legacy indexes should rebuild a missing SQLite sidecar');
+    await stat(manager.queryDatabasePath);
 
     const unchanged = await manager.index();
     assert.equal(unchanged.added, 0);
@@ -40,6 +46,7 @@ test('incremental indexing reuses unchanged records and applies add, change, and
     assert.equal((await manager.findCallers('beta')).length, 1);
     assert.equal((await manager.findCallees('alpha')).length, 1);
     assert.equal((await manager.findReferences('beta')).length, 1);
+    assert.ok((await manager.search('alpha')).some((result) => result.score > 0), 'indexed lexical terms should be queryable');
     assert.ok(snapshot.chunks.length >= 2);
   } finally {
     await rm(temporary, { recursive: true, force: true });

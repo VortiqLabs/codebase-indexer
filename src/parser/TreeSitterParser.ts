@@ -104,17 +104,32 @@ const inheritanceNodeKinds: Record<string, 'extends' | 'implements'> = {
 const MAX_PARSE_SIZE = 4 * 1024 * 1024; // 4 MB safety guard against huge source files spiking memory
 
 export class TreeSitterParser {
+  private readonly maxParsers: number;
+  private readonly availableParsers: Parser[] = [];
+  private readonly parserWaiters: Array<(parser: Parser) => void> = [];
+  private createdParsers = 0;
+
+  constructor(maxParsers = 2) {
+    if (!Number.isInteger(maxParsers) || maxParsers < 1 || maxParsers > 16) {
+      throw new RangeError('maxParsers must be an integer between 1 and 16');
+    }
+    this.maxParsers = maxParsers;
+  }
+
   async parse(filePath: string, source: string, language: string): Promise<ParsedFile | undefined> {
     if (source.length > MAX_PARSE_SIZE) return undefined;
     const grammar = grammarFor(filePath, language);
     if (!grammar) return undefined;
-    initialized ??= Parser.init();
+    initialized ??= Parser.init().catch((error: unknown) => {
+      initialized = undefined;
+      throw error;
+    });
     await initialized;
-    const parser = new Parser();
+    const lang = await getLanguage(grammar);
+    if (!lang) return undefined;
+    const parser = await this.acquireParser();
     let tree: Tree | null | undefined;
     try {
-      const lang = await getLanguage(grammar);
-      if (!lang) return undefined;
       parser.setLanguage(lang);
       tree = parser.parse(source);
       if (!tree) return { symbols: [], relations: [], chunks: [] };
@@ -123,8 +138,25 @@ export class TreeSitterParser {
       return undefined;
     } finally {
       tree?.delete();
-      parser.delete();
+      this.releaseParser(parser);
     }
+  }
+
+  private async acquireParser(): Promise<Parser> {
+    const available = this.availableParsers.pop();
+    if (available) return available;
+    if (this.createdParsers < this.maxParsers) {
+      this.createdParsers++;
+      try { return new Parser(); }
+      catch (error) { this.createdParsers--; throw error; }
+    }
+    return new Promise((resolve) => this.parserWaiters.push(resolve));
+  }
+
+  private releaseParser(parser: Parser): void {
+    const waiter = this.parserWaiters.shift();
+    if (waiter) waiter(parser);
+    else this.availableParsers.push(parser);
   }
 }
 

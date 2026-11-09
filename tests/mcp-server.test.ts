@@ -25,6 +25,8 @@ test('MCP server exposes tools for indexing, discovery, search, and source readi
     const toolNames = toolList.tools.map((tool) => tool.name);
     assert.ok(toolNames.includes('index_github_repository'));
     assert.ok(toolNames.includes('search_code'));
+    assert.ok(toolNames.includes('analyze_change_impact'));
+    assert.ok(toolNames.includes('analyze_architecture'));
 
     const indexed = await client.callTool({
       name: 'index_local_workspace',
@@ -42,6 +44,17 @@ test('MCP server exposes tools for indexing, discovery, search, and source readi
     const search = await client.callTool({ name: 'search_code', arguments: { query: 'mcpSample' } });
     const searchResults = JSON.parse(toolText(search)) as Array<{ filePath: string }>;
     assert.equal(searchResults[0]?.filePath, 'service.ts');
+
+    const impact = await client.callTool({
+      name: 'analyze_change_impact',
+      arguments: { indexUid: indexResult.uid, query: 'mcpSample' }
+    });
+    const impactResult = JSON.parse(toolText(impact)) as Array<{ matchedSymbols: Array<{ name: string }> }>;
+    assert.ok(impactResult[0]?.matchedSymbols.some((symbol) => symbol.name === 'mcpSample'));
+
+    const architecture = await client.callTool({ name: 'analyze_architecture', arguments: { indexUid: indexResult.uid } });
+    const architectureResult = JSON.parse(toolText(architecture)) as Array<{ files: unknown[] }>;
+    assert.equal(architectureResult[0]?.files.length, 1);
 
     const source = await client.callTool({
       name: 'read_indexed_file',
